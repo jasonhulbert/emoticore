@@ -56,13 +56,12 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.08));
 // envelope → particle corona whose inner band overlaps the plasma's bulge
 // envelope so the impenetrable-surface clamp visibly sweeps dust outward.
 const onyx = createOnyx({ radius: 0.55 });
-// Plasma now nearly fills the particle containment area — its max bulge
-// (~2.20) sits just inside the particles' soft outer (2.40) so the corona
-// reads as a thin glowing skin laminated onto the plasma surface.
+// Plasma is the visible source of the particles. Its max bulge (~2.20)
+// is the spawn surface; particles emit from the plasma, drift outward,
+// and die near uSoftOuter (2.40).
 const core = createCore({ radius: 1.90 });
 const particles = createParticles({
   count: 2700,
-  innerRadius: 1.00,
   outerRadius: 2.40,
 });
 
