@@ -22,10 +22,11 @@ import { simplex3d } from './shaders/noise.glsl.js';
 //   5. Slow pulse: global brightness modulation tied to the displacement so
 //      brighter regions also breathe.
 export function createCore({ radius = 1.90 } = {}) {
-  // Detail 64 -> ~80k tris. The previous 24 was too coarse for the noise
-  // frequency we're displacing at: each fbm feature was smaller than the
-  // inter-vertex spacing in places, producing visible faceting at peaks.
-  const geometry = new THREE.IcosahedronGeometry(radius, 64);
+  // Detail 32 -> ~20k tris (was 64 / 80k). At the current displacement
+  // (0.30) and noise scale (1.4), the per-vertex spacing on detail 32 is
+  // still finer than the smallest fbm feature so faceting isn't visible,
+  // and the vertex shader work is 4x cheaper.
+  const geometry = new THREE.IcosahedronGeometry(radius, 32);
 
   const uniforms = {
     uTime: { value: 0 },
@@ -140,6 +141,20 @@ export function createCore({ radius = 1.90 } = {}) {
         return n;
       }
 
+      // 3-octave variant for the high-frequency layers (ripple + crackle).
+      // The 4th octave there sits at sub-pixel frequencies anyway, so
+      // dropping it is invisible but saves 25% of those samples.
+      float fbm3(vec3 p) {
+        float n = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 3; i++) {
+          n += a * snoise(p);
+          p *= 2.05;
+          a *= 0.5;
+        }
+        return n;
+      }
+
       void main() {
         vec3 viewDir = normalize(vViewPosition);
         float ndv = max(dot(vNormal, viewDir), 0.0);
@@ -157,14 +172,16 @@ export function createCore({ radius = 1.90 } = {}) {
         float veins = pow(max(vein * 1.4, 0.0), 3.0);
 
         // (4) Mid-frequency surface ripple — soft warm shimmer over the
-        // plasma body, the slow fluid layer.
-        float rippleN = fbm4(vSurfaceDir * 9.0 + vec3(t2 * 1.6, 0.0, 7.3));
+        // plasma body, the slow fluid layer. fbm3 instead of fbm4: top
+        // octave at scale 9 * 8 = 72 is sub-pixel anyway.
+        float rippleN = fbm3(vSurfaceDir * 9.0 + vec3(t2 * 1.6, 0.0, 7.3));
         float ripple = pow(max(rippleN * 1.3, 0.0), 3.0);
 
         // (5) High-frequency electric crackle — sharp threshold gives
         // brief brilliant filaments that flash across the surface,
-        // riding on top of the smoother ripple layer.
-        float crackleN = fbm4(vSurfaceDir * 18.0 + vec3(t2 * 3.5, 11.2, 0.0));
+        // riding on top of the smoother ripple layer. fbm3 — top octave
+        // at scale 18 * 8 = 144 is well below pixel resolution.
+        float crackleN = fbm3(vSurfaceDir * 18.0 + vec3(t2 * 3.5, 11.2, 0.0));
         float crackle = pow(max(crackleN * 1.6, 0.0), 6.0);
 
         // Color buildup: ember base at troughs -> amber at the body ->
