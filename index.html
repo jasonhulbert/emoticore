@@ -68,6 +68,32 @@
         background: rgba(255, 200, 150, 0.16);
         color: rgba(255, 240, 220, 0.95);
       }
+
+      /* Narrow viewports — tighten the bottom UI so it fits comfortably
+         on phones without overlapping the orb or the lil-gui panel. */
+      @media (max-width: 520px) {
+        .moods {
+          bottom: 36px;
+          gap: 2px;
+          padding: 4px;
+        }
+        .moods button {
+          min-width: 0;
+          padding: 8px 10px;
+          font-size: 10px;
+          letter-spacing: 0.12em;
+        }
+        .hint {
+          bottom: 10px;
+          font-size: 9px;
+          letter-spacing: 0.14em;
+        }
+        /* Cap the tuning panel width so it doesn't dominate small screens. */
+        .lil-gui.root {
+          --width: 230px !important;
+          font-size: 11px !important;
+        }
+      }
     </style>
   </head>
   <body>

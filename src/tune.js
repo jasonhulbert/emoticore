@@ -19,6 +19,7 @@ import GUI from 'lil-gui';
 // displays update — so the controls always show the active preset.
 export function createTuningPanel({ moods, synapses }) {
   const gui = new GUI({ title: 'Tuning', width: 300 });
+  gui.close();
 
   // Proxy holds the values the GUI controllers bind to. We don't bind
   // controllers directly to mood-target objects because those objects
