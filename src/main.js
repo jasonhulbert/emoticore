@@ -50,9 +50,9 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.1));
 
 const core = createCore();
 const particles = createParticles({
-  count: 4500,
+  count: 2800,
   innerRadius: 0.62,
-  outerRadius: 0.95,
+  outerRadius: 0.93,
 });
 const orb = createOrb();
 
