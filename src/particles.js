@@ -1,15 +1,16 @@
 import * as THREE from 'three';
 import { simplex3d } from './shaders/noise.glsl.js';
 
-// Particle cloud that lives in the shell between the core blob and the orb wall.
-// Each particle is placed at a stable random seed; the vertex shader advects it
-// by curl noise sharing the SAME uTime/uNoiseScale as the core blob so the two
-// fields visibly interact — particles swirl with the morphing surface rather
-// than floating independently.
+// The energy cloud that swirls around the onyx void. Particles are placed in
+// a thick shell whose inner edge sits just outside the stone; their motion is
+// driven by curl noise of an unseen field at the center, so the cloud reads
+// as energy responding to "something" hidden inside the stone. Heavily
+// additive — the falloffs are tuned to bloom into a luminous corona at small
+// scales and reveal swirling chaos when zoomed in.
 export function createParticles({
-  count = 4000,
-  innerRadius = 0.62,
-  outerRadius = 0.95,
+  count = 5500,
+  innerRadius = 0.58,
+  outerRadius = 1.25,
 } = {}) {
   const geometry = new THREE.BufferGeometry();
 
@@ -18,48 +19,47 @@ export function createParticles({
   const sizes = new Float32Array(count);
 
   for (let i = 0; i < count; i++) {
-    // Uniform distribution in the shell between inner and outer radius.
-    const u = Math.random();
-    const r = Math.cbrt(
-      innerRadius ** 3 + u * (outerRadius ** 3 - innerRadius ** 3),
-    );
+    // Bias the radial distribution toward the inner shell so the corona
+    // is dense near the stone and feathers out into the dark.
+    const u = Math.pow(Math.random(), 1.6);
+    const r = innerRadius + u * (outerRadius - innerRadius);
     const theta = Math.acos(2 * Math.random() - 1);
     const phi = 2 * Math.PI * Math.random();
     seeds[i * 3 + 0] = r * Math.sin(theta) * Math.cos(phi);
     seeds[i * 3 + 1] = r * Math.sin(theta) * Math.sin(phi);
     seeds[i * 3 + 2] = r * Math.cos(theta);
     phases[i] = Math.random() * Math.PI * 2.0;
-    // Mix of small dust and rarer bright sparks.
-    sizes[i] = Math.random() < 0.04 ? 1.4 + Math.random() * 0.8 : 0.35 + Math.random() * 0.55;
+    // 12% sparks (bright, motion-blurred streaks) on a bed of warm dust.
+    sizes[i] = Math.random() < 0.12
+      ? 2.2 + Math.random() * 1.8
+      : 0.6 + Math.random() * 1.0;
   }
 
   geometry.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 3));
   geometry.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
   geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
-  // position attribute is required by three.js, but we compute the real
-  // position in the shader from aSeed. Keep it equal to aSeed so frustum
-  // culling has something sensible to work with.
   geometry.setAttribute('position', new THREE.BufferAttribute(seeds.slice(), 3));
-  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), outerRadius + 0.2);
+  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), outerRadius + 0.5);
 
   const uniforms = {
     uTime: { value: 0 },
-    uNoiseScale: { value: 1.6 }, // match core
-    uNoiseSpeed: { value: 0.35 }, // match core
-    uFlowStrength: { value: 0.25 },
-    uDisplacement: { value: 0.22 }, // match core
+    uNoiseScale: { value: 1.6 },
+    uNoiseSpeed: { value: 0.35 },
+    uFlowStrength: { value: 0.32 },
+    uDisplacement: { value: 0.22 },
     uInner: { value: innerRadius },
     uOuter: { value: outerRadius },
     uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
     uColorCool: { value: new THREE.Color('#7fd8ff') },
     uColorWarm: { value: new THREE.Color('#ffb36c') },
-    uSpark: { value: new THREE.Color('#ffffff') },
+    uSpark: { value: new THREE.Color('#fff4d8') },
   };
 
   const material = new THREE.ShaderMaterial({
     uniforms,
     transparent: true,
     depthWrite: false,
+    depthTest: true,
     blending: THREE.AdditiveBlending,
     vertexShader: /* glsl */ `
       ${simplex3d}
@@ -104,20 +104,17 @@ export function createParticles({
         );
         vec3 seed = rot * aSeed;
 
-        // Curl-noise flow: the derivative of the scalar field that shapes the
-        // core blob, so particles naturally stream around its bulges.
+        // Curl noise of the hidden energy field — particles stream around
+        // invisible bulges as if reacting to something inside the stone.
         vec3 flow = snoiseCurl(seed * uNoiseScale + vec3(0.0, t, 0.0));
         vec3 pos = seed + flow * uFlowStrength;
 
-        // Radial push: when the core bulges outward in a direction, particles
-        // near that direction get nudged outward too.
         vec3 dir = normalize(seed);
-        float coreField = fbm(dir * uNoiseScale + vec3(0.0, t, 0.0));
-        float bulge = coreField * uDisplacement;
+        float field = fbm(dir * uNoiseScale + vec3(0.0, t, 0.0));
+        float bulge = field * uDisplacement;
         pos += dir * bulge * 0.9;
 
-        // Keep the cloud inside the shell. If the core bulge has eaten past
-        // this particle, float it back out to the inner surface.
+        // Never let particles intrude into the stone.
         float len = length(pos);
         float innerBound = uInner + max(bulge, 0.0);
         if (len < innerBound) {
@@ -133,10 +130,10 @@ export function createParticles({
         vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
         gl_Position = projectionMatrix * mvPosition;
 
-        float size = aSize * (1.0 + vSpeed * 0.4);
-        // Clamp to keep individual sparks from becoming giant additive blobs
-        // on high-DPI screens (iPad pixel ratio is 2-3x).
-        gl_PointSize = clamp(size * uPixelRatio * (55.0 / -mvPosition.z), 1.0, 40.0);
+        float size = aSize * (1.0 + vSpeed * 0.6);
+        // Cap kept generous so the bloom can build up but no single point
+        // dominates the screen on high-DPI displays.
+        gl_PointSize = clamp(size * uPixelRatio * (160.0 / -mvPosition.z), 1.0, 90.0);
       }
     `,
     fragmentShader: /* glsl */ `
@@ -153,19 +150,21 @@ export function createParticles({
         float d = length(uv);
         if (d > 0.5) discard;
 
-        // Tight gaussian-ish falloff for dust; sparks add a soft halo on top.
-        float dust = exp(-d * d * 18.0);
-        float halo = smoothstep(0.5, 0.1, d);
-        float shape = mix(dust, dust * 0.6 + pow(halo, 4.0) * 0.6, vSpark);
+        // Soft dust + a punchy halo for sparks. Halo's wide shoulders are
+        // what creates the bloom corona when zoomed out.
+        float dust = exp(-d * d * 12.0);
+        float halo = smoothstep(0.5, 0.05, d);
+        float shape = mix(dust * 0.7 + halo * 0.25, dust * 0.4 + pow(halo, 2.5), vSpark);
 
-        // Color shifts from cool cyan to warm only at high curl-flow speed,
-        // so the cloud reads mostly cool with occasional warm streaks.
-        vec3 col = mix(uColorCool, uColorWarm, clamp(vSpeed * 0.4, 0.0, 1.0));
-        col = mix(col, uSpark, vSpark * 0.5);
+        // Cool deep in the cloud, warm on the fast-moving streaks. Sparks
+        // bias toward a warm-white core so the corona feels alive, not icy.
+        vec3 col = mix(uColorCool, uColorWarm, clamp(vSpeed * 1.2, 0.0, 1.0));
+        col = mix(col, uSpark, vSpark * 0.7);
 
-        // Fade particles near the orb wall so they feel contained by frost.
-        float edgeFade = 1.0 - smoothstep(0.6, 1.0, vRadial);
-        float alpha = shape * (0.18 + 0.42 * edgeFade);
+        // Soft fade at the very outer edge so the corona feathers into black
+        // instead of cutting off.
+        float edgeFade = 1.0 - smoothstep(0.7, 1.0, vRadial);
+        float alpha = shape * (0.35 + 0.55 * edgeFade);
 
         gl_FragColor = vec4(col, alpha);
       }
@@ -174,7 +173,9 @@ export function createParticles({
 
   const points = new THREE.Points(geometry, material);
   points.frustumCulled = false;
-  points.renderOrder = 0;
+  // Render after the opaque onyx so depthTest hides particles behind the
+  // stone while ones in front bloom additively over the dark silhouette.
+  points.renderOrder = 1;
 
   return {
     points,
