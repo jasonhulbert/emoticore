@@ -55,10 +55,10 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.08));
 // Layer order from inside out: opaque onyx stone → noise-displaced plasma
 // envelope → particle corona whose inner band overlaps the plasma's bulge
 // envelope so the impenetrable-surface clamp visibly sweeps dust outward.
-const onyx = createOnyx({ radius: 0.55 });
-// Plasma is the visible source of the particles. Its max bulge (~2.20)
-// is the spawn surface; particles emit from the plasma, drift outward,
-// and die near uSoftOuter (2.40).
+// Onyx is now nearly as large as the plasma. Plasma min trough sits at
+// uEnvBase - uEnvDisp = 1.60, so onyx at 1.55 leaves a thin breathing
+// gap that the plasma always wraps without intersecting the stone.
+const onyx = createOnyx({ radius: 1.55 });
 const core = createCore({ radius: 1.90 });
 const particles = createParticles({
   count: 2700,
