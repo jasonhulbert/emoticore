@@ -104,11 +104,14 @@ const PARTICLE_FADE_RADIUS = 2.60;
 particles.uniforms.uEnvBase.value = PLASMA_BASE_RADIUS;
 particles.uniforms.uEnvDisp.value = core.uniforms.uDisplacement.value;
 particles.uniforms.uNoiseScale.value = core.uniforms.uNoiseScale.value;
-particles.uniforms.uNoiseSpeed.value = core.uniforms.uNoiseSpeed.value;
 
 const group = new THREE.Group();
 group.add(onyx.mesh);
 group.add(core.mesh);
+// Halo shell: soft fresnel-only sphere just outside the plasma. Visually
+// extends the plasma's silhouette into a wide diffuse glow that bleeds
+// into the dark, matching the gaussian halos on the particles.
+group.add(core.halo);
 group.add(particles.points);
 scene.add(group);
 
@@ -142,6 +145,13 @@ window.addEventListener('resize', () => {
 
 const clock = new THREE.Clock();
 let frameCount = 0;
+// Accumulated noise + flare clocks for the plasma surface and flare field.
+// Advanced each frame by dt * (current speed) so that mood transitions
+// don't cause discontinuous jumps in the noise sample location — only
+// the rate of advance changes. Plasma and particle shaders both read
+// uNoiseTime so they stay locked to the same surface field.
+let plasmaNoiseTime = 0;
+let plasmaFlareTime = 0;
 function tick() {
   const dt = clock.getDelta();
   const elapsed = clock.elapsedTime;
@@ -150,6 +160,13 @@ function tick() {
   // Mood lerp runs first so subsequent updates read the freshly
   // interpolated uniforms (e.g. uDisplacement piped to particles).
   moods.update(dt);
+
+  // Advance the accumulated clocks using the current (post-lerp) speeds.
+  plasmaNoiseTime += dt * core.uniforms.uNoiseSpeed.value;
+  plasmaFlareTime += dt * core.uniforms.uFlareSpeed.value;
+  core.uniforms.uNoiseTime.value = plasmaNoiseTime;
+  core.uniforms.uFlareTime.value = plasmaFlareTime;
+  particles.uniforms.uNoiseTime.value = plasmaNoiseTime;
 
   core.update(elapsed, dt);
   particles.update(elapsed);
