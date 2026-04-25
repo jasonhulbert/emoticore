@@ -1,19 +1,19 @@
 import * as THREE from 'three';
 import { simplex3d } from './shaders/noise.glsl.js';
 
-// The morphing energy blob at the center of the orb. A high-res sphere whose
-// vertices are displaced by layered 3D noise in the vertex shader, shaded with
-// a fresnel-weighted emissive gradient so the core reads as luminous plasma.
-export function createCore() {
-  // Detail 24 → ~11k tris: smooth enough for noise displacement,
-  // light enough for mobile GPUs.
-  const geometry = new THREE.IcosahedronGeometry(0.55, 24);
+// The morphing plasma envelope wrapping the onyx stone. A noise-displaced
+// sphere sized just outside the stone, additively blended so where it
+// intersects the onyx the depth test culls it cleanly and where it extends
+// past the silhouette it reads as glowing plasma. Same noise field as the
+// particle cloud so plasma surface bulges and particle motion stay locked.
+export function createCore({ radius = 0.62 } = {}) {
+  const geometry = new THREE.IcosahedronGeometry(radius, 24);
 
   const uniforms = {
     uTime: { value: 0 },
     uNoiseScale: { value: 1.6 },
-    uNoiseSpeed: { value: 0.35 },
-    uDisplacement: { value: 0.22 },
+    uNoiseSpeed: { value: 0.4 },
+    uDisplacement: { value: 0.18 },
     uPulse: { value: 0.0 },
     uColorA: { value: new THREE.Color('#6ce0ff') }, // cool cyan
     uColorB: { value: new THREE.Color('#b16cff') }, // violet
@@ -83,11 +83,16 @@ export function createCore() {
         vec3 col = mix(uColorA, uColorB, m);
         col = mix(col, uColorC, fresnel * 0.65);
 
-        // Bias toward a hot center so the blob reads as energy, not matte clay.
+        // Bias toward a hot center so the plasma reads as energy, not matte
+        // clay. Brightness peaks at the silhouette edge from the fresnel.
         float center = 1.0 - fresnel;
-        col += uColorC * center * 0.35;
+        col += uColorC * center * 0.4;
 
-        float alpha = clamp(0.55 + fresnel * 0.6, 0.0, 1.0);
+        // Lower base alpha than the original orb-encased version so the
+        // particle corona reads through the plasma instead of being masked
+        // by it. The fresnel-weighted boost makes the rim of the bulges
+        // (the plasma surface seen edge-on) glow brightest.
+        float alpha = clamp(0.18 + fresnel * 0.7, 0.0, 1.0);
         gl_FragColor = vec4(col, alpha);
       }
     `,

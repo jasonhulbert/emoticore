@@ -50,19 +50,27 @@ scene.add(key);
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.08));
 
-// Core stays in the simulation but is never added to the scene — its
-// uniforms drive the hidden energy field that the particle cloud reacts to,
-// and clicks "poke" it to send ripples outward through the cloud.
-const core = createCore();
+// Layer order from inside out: opaque onyx stone → noise-displaced plasma
+// envelope hugging the stone → swirling particle corona. The plasma's
+// uniforms drive the particle cloud so their motion stays coherent, and
+// clicks "poke" the plasma to send ripples outward through both layers.
 const onyx = createOnyx({ radius: 0.55 });
+const core = createCore({ radius: 0.62 });
 const particles = createParticles({
   count: 5500,
-  innerRadius: 0.58,
-  outerRadius: 1.25,
+  innerRadius: 0.78,
+  outerRadius: 1.3,
 });
+
+// Explicit render order: onyx is opaque so it always renders first and
+// writes depth; plasma and particles are additive transparent — plasma
+// before particles so the corona's brightest sparks layer on top.
+core.mesh.renderOrder = 1;
+particles.points.renderOrder = 2;
 
 const group = new THREE.Group();
 group.add(onyx.mesh);
+group.add(core.mesh);
 group.add(particles.points);
 scene.add(group);
 
