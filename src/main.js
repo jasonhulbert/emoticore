@@ -108,12 +108,18 @@ particles.uniforms.uNoiseScale.value = core.uniforms.uNoiseScale.value;
 const group = new THREE.Group();
 group.add(onyx.mesh);
 group.add(core.mesh);
-// Halo shell: soft fresnel-only sphere just outside the plasma. Visually
-// extends the plasma's silhouette into a wide diffuse glow that bleeds
-// into the dark, matching the gaussian halos on the particles.
-group.add(core.halo);
+// Gradient glow billboard: camera-facing quad rendered behind the plasma
+// with a radial gradient that's brightest at the orb center and fades
+// outward. The opaque onyx occludes the inner portion via depth test, so
+// the visible result is a soft volumetric aura bleeding past the plasma
+// silhouette — light emitting from the center outward.
+group.add(core.glow);
 group.add(particles.points);
 scene.add(group);
+
+// Glow size baseline; main.js scales it each frame to track moods.plasmaScale
+// so the aura swells/contracts in sync with the plasma mesh.
+const GLOW_BASE_SIZE = core.glow.material.uniforms.uSize.value;
 
 // Pokes only fire on canvas taps so the mood buttons can be clicked
 // without also pulsing the core every time.
@@ -183,6 +189,9 @@ function tick() {
     (core.uniforms.uDisplacement.value + core.uniforms.uPulse.value * 0.15) * ps;
   particles.uniforms.uSoftOuter.value = PARTICLE_OUTER_RADIUS * ps;
   particles.uniforms.uFadeRadius.value = PARTICLE_FADE_RADIUS * ps;
+  // Glow billboard scales with the plasma so the aura swells and
+  // contracts with the visible mesh.
+  core.glow.material.uniforms.uSize.value = GLOW_BASE_SIZE * ps;
 
   group.rotation.y = Math.sin(elapsed * 0.15) * 0.15;
   group.position.y = Math.sin(elapsed * 0.6) * 0.02;
