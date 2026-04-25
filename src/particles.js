@@ -248,24 +248,22 @@ export function createParticles({
           L = minRadius;
         }
 
-        // Soft elastic outer containment. Past uSoftOuter, particles are
-        // pulled radially inward by an exponentially growing force that
-        // hits a hard wall at uOuter. Result: the bulk of the cloud sits
-        // inside uSoftOuter without forming a sharp sphere boundary, but
-        // nothing escapes to infinity.
-        if (L > uSoftOuter) {
-          float over = L - uSoftOuter;
-          float pullback = 1.0 - exp(-over * 6.0);
-          float maxOver = uOuter - uSoftOuter;
-          float clampedOver = min(over * (1.0 - pullback), maxOver);
-          pos = (pos / L) * (uSoftOuter + clampedOver);
-        }
+        // No outer clamp -- previous elastic boundary caused particles to
+        // accumulate and drift along the soft outer edge. Particles now
+        // flow freely outward; the fragment shader fades them out sharply
+        // past uSoftOuter so they die when leaving the cloud area. The
+        // lifecycle continues running, and the per-cycle seed offset will
+        // respawn them at a fresh interior position next cycle.
 
         // Final velocity proxy for shading — particles strongly coupled to
         // the surface, or moving fast in ambient curl, glow warmer.
         vSpeed = length(ambient) + length(surfTangent) * influence;
         vDistance = length(pos);
-        vRadial = vDistance / uFadeRadius;
+        // Outer boundary fade: 1 inside the cloud area, ramping to 0 over
+        // a short transition past uSoftOuter, fully faded by uFadeRadius.
+        // Particles drifting outward die rapidly instead of pinning to
+        // the boundary.
+        vRadial = 1.0 - smoothstep(uSoftOuter, uFadeRadius, vDistance);
         // Smooth sparkness across the dust/spark gap (dust ≤0.8, sparks ≥1.0)
         // instead of a hard step, for a gentler size→shape mapping.
         vSpark = smoothstep(0.85, 1.4, aSize);
@@ -332,16 +330,17 @@ export function createParticles({
         float chroma = max(halo - core, 0.0);
         col = mix(col, col * vec3(0.7, 0.88, 1.10), chroma * 0.25);
 
-        // Outer envelope fade keeps particles feathering into the dark
-        // instead of pinning to a sphere boundary.
-        float edgeFade = 1.0 - smoothstep(0.85, 1.25, vRadial);
-
-        // vLife (lifecycle bell curve) and vBrightness (per-particle base
-        // brightness, ~0.7-1.0) combine for the final attenuation. With
-        // 2700 particles all on independent cycles, at any moment some are
-        // bright, some are fading, some are dark — the cloud reads as
-        // continuously regenerating instead of a static pattern.
-        float alpha = intensity * (0.40 + 0.50 * edgeFade) * vLife * vBrightness;
+        // Three independent attenuation factors:
+        //   - vRadial: 1 inside the cloud, 0 past the outer boundary.
+        //     Particles that drift outward die out sharply instead of
+        //     pinning to the boundary.
+        //   - vLife:   bell-curve lifecycle (0 -> 1 -> 0 over each cycle).
+        //   - vBrightness: per-particle base brightness (0.7-1.0).
+        //
+        // With 2700 particles all on independent cycles + the per-cycle
+        // seed offset, particles that hit the edge fade to nothing, then
+        // their next lifecycle resurrects them at a fresh interior point.
+        float alpha = intensity * 0.85 * vRadial * vLife * vBrightness;
 
         gl_FragColor = vec4(col, alpha);
       }
