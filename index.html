@@ -24,17 +24,60 @@
         bottom: 14px;
         left: 50%;
         transform: translateX(-50%);
-        font-size: 12px;
-        letter-spacing: 0.15em;
+        font-size: 11px;
+        letter-spacing: 0.18em;
         text-transform: uppercase;
-        opacity: 0.4;
+        opacity: 0.35;
         pointer-events: none;
         user-select: none;
+      }
+      .moods {
+        position: fixed;
+        bottom: 44px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 4px;
+        padding: 5px;
+        background: rgba(8, 12, 22, 0.55);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 999px;
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        z-index: 10;
+      }
+      .moods button {
+        min-width: 84px;
+        padding: 10px 18px;
+        border: none;
+        border-radius: 999px;
+        background: transparent;
+        color: rgba(200, 210, 230, 0.55);
+        font-family: inherit;
+        font-size: 11px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: background 240ms ease, color 240ms ease;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .moods button:hover {
+        color: rgba(255, 240, 220, 0.85);
+      }
+      .moods button.active {
+        background: rgba(255, 200, 150, 0.16);
+        color: rgba(255, 240, 220, 0.95);
       }
     </style>
   </head>
   <body>
     <div id="app"></div>
+    <div class="moods" id="moods">
+      <button data-mood="idle" class="active">Idle</button>
+      <button data-mood="thinking">Thinking</button>
+      <button data-mood="excited">Excited</button>
+      <button data-mood="alert">Alert</button>
+    </div>
     <div class="hint">drag to orbit · scroll to zoom</div>
     <script type="module" src="/src/main.js"></script>
   </body>
