@@ -16,8 +16,11 @@ import { simplex3d } from './shaders/noise.glsl.js';
 // surface gets clamped to surface + ε, like dust around a fluid boundary.
 export function createParticles({
   count = 2750,
-  innerRadius = 1.25,
-  outerRadius = 1.95,
+  // Inner radius is intentionally *inside* the plasma's max bulge so the
+  // impenetrable-surface clamp fires every frame for some particles —
+  // bulges literally sweep dust outward, the most visible coupling effect.
+  innerRadius = 1.05,
+  outerRadius = 2.20,
 } = {}) {
   const geometry = new THREE.BufferGeometry();
 
@@ -51,17 +54,24 @@ export function createParticles({
     uTime: { value: 0 },
     // Plasma envelope parameters (kept identical to core.js so the surface
     // particles see is the surface they're rendered next to).
-    uEnvBase: { value: 0.93 },
-    uEnvDisp: { value: 0.27 },
+    uEnvBase: { value: 1.15 },
+    uEnvDisp: { value: 0.36 },
     uNoiseScale: { value: 1.6 },
     uNoiseSpeed: { value: 0.4 },
     // Coupling strengths. Sweep is tangential drag (eddies dragging dust
     // along the surface). Push is radial impulse when the surface expands
     // outward at this point. Falloff controls how fast influence decays
     // with distance from the surface.
-    uEnvSweep: { value: 0.55 },
-    uEnvPush: { value: 0.7 },
-    uEnvFalloff: { value: 4.0 },
+    //
+    // Sweep + push tuned aggressively — the user could not see the coupling
+    // at the previous values because particles never overlapped with the
+    // plasma's reach (so the clamp never fired) and the falloff (4.0)
+    // damped the sweep too quickly outside the surface. Now the inner
+    // particle band sits inside the bulge envelope and influence extends
+    // further out so the boundary layer is several particle-widths thick.
+    uEnvSweep: { value: 1.10 },
+    uEnvPush: { value: 1.40 },
+    uEnvFalloff: { value: 2.2 },
     // Background curl-noise drift far from the surface.
     uAmbientFlow: { value: 0.18 },
     uOuter: { value: outerRadius },

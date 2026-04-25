@@ -24,7 +24,7 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   100,
 );
-camera.position.set(0, 0.1, 4.2);
+camera.position.set(0, 0.1, 4.8);
 
 // Subtle env map for the polished onyx highlights — kept dim so the stone
 // reads as solid mass, not a chrome ball.
@@ -50,17 +50,17 @@ scene.add(key);
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.08));
 
-// Layer order from inside out: opaque onyx stone → noise-displaced plasma
-// envelope (50% bigger than the stone) → particle corona swirling outside
-// the plasma's max bulge. The particle shader treats the plasma surface as
-// a moving fluid boundary and derives motion from its velocity field, so
-// growing or pulsing the plasma automatically deforms the cloud.
+// Layer order from inside out: opaque onyx stone → larger noise-displaced
+// plasma envelope → particle corona whose inner band intentionally overlaps
+// with the plasma's max bulge so the surface bulges visibly sweep dust
+// outward. The particle shader treats the plasma surface as a moving fluid
+// boundary and derives motion from its velocity field.
 const onyx = createOnyx({ radius: 0.55 });
-const core = createCore({ radius: 0.93 });
+const core = createCore({ radius: 1.15 });
 const particles = createParticles({
   count: 2750,
-  innerRadius: 1.25,
-  outerRadius: 1.95,
+  innerRadius: 1.05,
+  outerRadius: 2.20,
 });
 
 core.mesh.renderOrder = 1;
@@ -68,8 +68,7 @@ particles.points.renderOrder = 2;
 
 // Lock the particle shader's view of the plasma surface to the actual
 // envelope: same base radius, displacement, noise scale, and time speed.
-// Doing this once at init is enough — these don't change after creation.
-particles.uniforms.uEnvBase.value = 0.93;
+particles.uniforms.uEnvBase.value = 1.15;
 particles.uniforms.uEnvDisp.value = core.uniforms.uDisplacement.value;
 particles.uniforms.uNoiseScale.value = core.uniforms.uNoiseScale.value;
 particles.uniforms.uNoiseSpeed.value = core.uniforms.uNoiseSpeed.value;
