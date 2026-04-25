@@ -15,18 +15,19 @@ import { simplex3d } from './shaders/noise.glsl.js';
 // Particles are also strictly impenetrable: any position inside the plasma
 // surface gets clamped to surface + ε, like dust around a fluid boundary.
 export function createParticles({
-  count = 2750,
+  count = 1800,
   // Inner radius is intentionally *inside* the plasma's max bulge so the
   // impenetrable-surface clamp fires every frame for some particles —
   // bulges literally sweep dust outward, the most visible coupling effect.
-  innerRadius = 1.05,
-  outerRadius = 2.20,
+  innerRadius = 1.00,
+  outerRadius = 1.90,
 } = {}) {
   const geometry = new THREE.BufferGeometry();
 
   const seeds = new Float32Array(count * 3);
   const phases = new Float32Array(count);
   const sizes = new Float32Array(count);
+  const rates = new Float32Array(count);
 
   for (let i = 0; i < count; i++) {
     // Bias inward so the corona is densest just outside the plasma surface,
@@ -42,39 +43,42 @@ export function createParticles({
     sizes[i] = Math.random() < 0.12
       ? 2.2 + Math.random() * 1.8
       : 0.6 + Math.random() * 1.0;
+    // Per-particle orbit rate (and sign) so the cloud doesn't rotate as a
+    // rigid sphere — different particles travel at different angular speeds
+    // and some go counter-clockwise, breaking up the uniform pattern.
+    rates[i] = (Math.random() - 0.5) * 0.4;
   }
 
   geometry.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 3));
   geometry.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
   geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+  geometry.setAttribute('aRate', new THREE.BufferAttribute(rates, 1));
   geometry.setAttribute('position', new THREE.BufferAttribute(seeds.slice(), 3));
-  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), outerRadius + 0.5);
+  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), outerRadius + 1.5);
 
   const uniforms = {
     uTime: { value: 0 },
     // Plasma envelope parameters (kept identical to core.js so the surface
     // particles see is the surface they're rendered next to).
     uEnvBase: { value: 1.15 },
-    uEnvDisp: { value: 0.36 },
-    uNoiseScale: { value: 1.6 },
-    uNoiseSpeed: { value: 0.4 },
+    uEnvDisp: { value: 0.32 },
+    uNoiseScale: { value: 1.4 },
+    uNoiseSpeed: { value: 0.28 },
     // Coupling strengths. Sweep is tangential drag (eddies dragging dust
     // along the surface). Push is radial impulse when the surface expands
     // outward at this point. Falloff controls how fast influence decays
     // with distance from the surface.
-    //
-    // Sweep + push tuned aggressively — the user could not see the coupling
-    // at the previous values because particles never overlapped with the
-    // plasma's reach (so the clamp never fired) and the falloff (4.0)
-    // damped the sweep too quickly outside the surface. Now the inner
-    // particle band sits inside the bulge envelope and influence extends
-    // further out so the boundary layer is several particle-widths thick.
     uEnvSweep: { value: 1.10 },
     uEnvPush: { value: 1.40 },
     uEnvFalloff: { value: 2.2 },
-    // Background curl-noise drift far from the surface.
-    uAmbientFlow: { value: 0.18 },
-    uOuter: { value: outerRadius },
+    // Background curl-noise drift far from the surface. Bumped substantially
+    // so far-out particles are not visibly static — without this, only the
+    // inner band moves and the outer cloud reads as a frozen sphere shell.
+    uAmbientFlow: { value: 0.55 },
+    // Soft cap radius for fragment-shader fade only — there is no hard
+    // outer clamp on position any more, so particles disperse naturally
+    // into the dark instead of pinning to a sphere.
+    uFadeRadius: { value: outerRadius + 0.4 },
     uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
     uColorCool: { value: new THREE.Color('#7fd8ff') },
     uColorWarm: { value: new THREE.Color('#ffb36c') },
@@ -98,17 +102,19 @@ export function createParticles({
       uniform float uEnvPush;
       uniform float uEnvFalloff;
       uniform float uAmbientFlow;
-      uniform float uOuter;
+      uniform float uFadeRadius;
       uniform float uPixelRatio;
 
       attribute vec3 aSeed;
       attribute float aPhase;
       attribute float aSize;
+      attribute float aRate;
 
       varying float vSpeed;
       varying float vRadial;
       varying float vSpark;
       varying float vInfluence;
+      varying float vDistance;
 
       float fbm(vec3 p) {
         float n = 0.0;
@@ -126,18 +132,26 @@ export function createParticles({
         return uEnvBase + fbm(dir * uNoiseScale + vec3(0.0, t, 0.0)) * uEnvDisp;
       }
 
+      // Rotate a vector around a given unit axis by an angle (Rodrigues).
+      vec3 rotateAxis(vec3 v, vec3 axis, float angle) {
+        float c = cos(angle);
+        float s = sin(angle);
+        return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
+      }
+
       void main() {
         float t = uTime * uNoiseSpeed;
 
-        // Slow orbital drift unique to each particle keeps streamlines from
-        // collapsing into static patterns.
-        float orbit = uTime * 0.10 + aPhase;
-        mat3 rot = mat3(
-          cos(orbit), 0.0, sin(orbit),
-          0.0,        1.0, 0.0,
-          -sin(orbit), 0.0, cos(orbit)
-        );
-        vec3 seed = rot * aSeed;
+        // Per-particle orbital drift around an axis derived from the phase.
+        // Different rates and axes per particle prevent the cloud from
+        // rotating as a coherent sphere.
+        vec3 axis = normalize(vec3(
+          sin(aPhase * 1.3),
+          cos(aPhase * 0.7) + 0.5,
+          sin(aPhase * 1.9)
+        ));
+        float angle = uTime * aRate + aPhase;
+        vec3 seed = rotateAxis(aSeed, axis, angle);
         vec3 dir = normalize(seed);
 
         // Ambient turbulence (curl noise = divergence-free turbulent flow,
@@ -153,9 +167,7 @@ export function createParticles({
         float surfVel = (surfF - surf) / 0.08;
 
         // Influence factor: 1 right at the surface, decaying exponentially
-        // with distance. This is the physical "viscous boundary layer"
-        // approximation — the surface drags the surrounding medium with a
-        // strength that falls off with distance.
+        // with distance. Standard viscous-boundary-layer model.
         float distOut = max(length(pos) - surf, 0.0);
         float influence = exp(-distOut * uEnvFalloff);
         vInfluence = influence;
@@ -170,25 +182,23 @@ export function createParticles({
 
         // Radial push: when the surface is expanding outward at this point
         // (positive surfVel), particles get accelerated outward. Negative
-        // surfVel (surface receding) doesn't pull particles back — gas
-        // doesn't get sucked into a deflating boundary in this model.
+        // surfVel (surface receding) doesn't pull particles back.
         pos += dir * max(surfVel, 0.0) * uEnvPush * influence;
 
         // Impenetrable plasma surface: any position inside surf + ε gets
-        // pushed back out to the surface. ε keeps the densest dust band
-        // visibly separated from the plasma rim.
+        // pushed back out to the surface. No outer clamp — particles are
+        // free to disperse into the dark, fade handled in fragment shader.
         float minRadius = surf + 0.04;
         float L = length(pos);
         if (L < minRadius) {
           pos = (pos / L) * minRadius;
-        } else if (L > uOuter) {
-          pos = (pos / L) * uOuter;
         }
 
         // Final velocity proxy for shading — particles strongly coupled to
         // the surface, or moving fast in ambient curl, glow warmer.
         vSpeed = length(ambient) + length(surfTangent) * influence;
-        vRadial = (length(pos) - minRadius) / (uOuter - minRadius);
+        vDistance = length(pos);
+        vRadial = vDistance / uFadeRadius;
         vSpark = step(1.8, aSize);
 
         vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
@@ -207,6 +217,7 @@ export function createParticles({
       varying float vRadial;
       varying float vSpark;
       varying float vInfluence;
+      varying float vDistance;
 
       void main() {
         vec2 uv = gl_PointCoord - 0.5;
@@ -219,14 +230,15 @@ export function createParticles({
 
         // Particles riding the plasma surface lean warm / spark-colored —
         // they're hotter and faster than ambient dust drifting in the dark.
-        float warmth = clamp(vSpeed * 1.0 + vInfluence * 0.6, 0.0, 1.0);
+        float warmth = clamp(vSpeed * 0.7 + vInfluence * 0.6, 0.0, 1.0);
         vec3 col = mix(uColorCool, uColorWarm, warmth);
         col = mix(col, uSpark, vSpark * 0.7);
 
-        // Soft outer fade so the corona feathers into black instead of
-        // cutting off at the boundary sphere.
-        float edgeFade = 1.0 - smoothstep(0.7, 1.0, vRadial);
-        float alpha = shape * (0.35 + 0.55 * edgeFade);
+        // Soft alpha fade based on absolute distance from origin — particles
+        // that drift far from the cloud's natural envelope feather to black
+        // instead of being clamped onto a hard sphere.
+        float edgeFade = 1.0 - smoothstep(0.85, 1.25, vRadial);
+        float alpha = shape * (0.30 + 0.55 * edgeFade);
 
         gl_FragColor = vec4(col, alpha);
       }

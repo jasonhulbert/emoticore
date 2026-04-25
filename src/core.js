@@ -22,13 +22,16 @@ import { simplex3d } from './shaders/noise.glsl.js';
 //   5. Slow pulse: global brightness modulation tied to the displacement so
 //      brighter regions also breathe.
 export function createCore({ radius = 1.15 } = {}) {
-  const geometry = new THREE.IcosahedronGeometry(radius, 24);
+  // Detail 64 -> ~80k tris. The previous 24 was too coarse for the noise
+  // frequency we're displacing at: each fbm feature was smaller than the
+  // inter-vertex spacing in places, producing visible faceting at peaks.
+  const geometry = new THREE.IcosahedronGeometry(radius, 64);
 
   const uniforms = {
     uTime: { value: 0 },
-    uNoiseScale: { value: 1.6 },
-    uNoiseSpeed: { value: 0.4 },
-    uDisplacement: { value: 0.36 },
+    uNoiseScale: { value: 1.4 },
+    uNoiseSpeed: { value: 0.28 },
+    uDisplacement: { value: 0.32 },
     uPulse: { value: 0.0 },
     // Warm palette matched to the corona — deep ember through amber up to
     // a hot spark white, so the plasma reads as a continuation of the
@@ -131,10 +134,10 @@ export function createCore({ radius = 1.15 } = {}) {
         float vein = fbm4(vSurfaceDir * 5.5 + vec3(0.0, t2, 0.0));
         float veins = pow(max(vein * 1.4, 0.0), 3.0);
 
-        // (4) High-frequency electric crackle — sharp threshold creates
-        // brief filaments that flash across the surface.
-        float crackleN = fbm4(vSurfaceDir * 18.0 + vec3(t2 * 3.5, 0.0, 7.3));
-        float crackle = pow(max(crackleN * 1.6, 0.0), 6.0);
+        // (4) Mid-frequency surface ripple — softer than the previous
+        // electric crackle so the plasma reads fluid, not jagged.
+        float rippleN = fbm4(vSurfaceDir * 9.0 + vec3(t2 * 1.6, 0.0, 7.3));
+        float ripple = pow(max(rippleN * 1.3, 0.0), 3.0);
 
         // Color buildup: ember base at troughs -> amber at the body ->
         // hot rim at fresnel grazing -> spark filaments on top of that.
@@ -149,8 +152,8 @@ export function createCore({ radius = 1.15 } = {}) {
         // line up with the rim — like seeing through to deeper channels.
         col += uColorSpark * veins * (0.55 + fresnel * 0.7);
 
-        // Crackles flash white-hot regardless of fresnel.
-        col += uColorSpark * crackle * 1.6;
+        // Ripples add a soft warm shimmer over the body.
+        col += uColorSpark * ripple * 0.9;
 
         // (5) Slow whole-body pulse keyed to the noise so brighter regions
         // also breathe more — never feels static.
@@ -164,7 +167,7 @@ export function createCore({ radius = 1.15 } = {}) {
           0.16
           + fresnel * 0.75
           + veins * 0.30
-          + crackle * 0.55,
+          + ripple * 0.30,
           0.0,
           1.0
         );

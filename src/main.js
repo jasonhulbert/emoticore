@@ -50,17 +50,15 @@ scene.add(key);
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.08));
 
-// Layer order from inside out: opaque onyx stone → larger noise-displaced
-// plasma envelope → particle corona whose inner band intentionally overlaps
-// with the plasma's max bulge so the surface bulges visibly sweep dust
-// outward. The particle shader treats the plasma surface as a moving fluid
-// boundary and derives motion from its velocity field.
+// Layer order from inside out: opaque onyx stone → noise-displaced plasma
+// envelope → particle corona whose inner band overlaps the plasma's bulge
+// envelope so the impenetrable-surface clamp visibly sweeps dust outward.
 const onyx = createOnyx({ radius: 0.55 });
 const core = createCore({ radius: 1.15 });
 const particles = createParticles({
-  count: 2750,
-  innerRadius: 1.05,
-  outerRadius: 2.20,
+  count: 1800,
+  innerRadius: 1.00,
+  outerRadius: 1.90,
 });
 
 core.mesh.renderOrder = 1;
