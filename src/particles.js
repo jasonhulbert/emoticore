@@ -86,7 +86,7 @@ export function createParticles({
     // uFadeRadius, so anything that overshoots dies cleanly.
     uSoftOuter: { value: outerRadius },
     uFadeRadius: { value: outerRadius + 0.2 },
-    uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+    uPixelRatio: { value: Math.min(window.devicePixelRatio, 1.5) },
     uColorCool: { value: new THREE.Color('#7fd8ff') },
     uColorWarm: { value: new THREE.Color('#ffb36c') },
     uSpark: { value: new THREE.Color('#fff4d8') },

@@ -9,7 +9,11 @@ import { MoodManager } from './moods.js';
 const container = document.getElementById('app');
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// Pixel ratio cap 1.5 (was 2.0) — on a Retina display this cuts fragment
+// shader work by ~44% with barely perceptible softening on this kind of
+// organic content. Single biggest fragment-shader savings in the scene.
+const PIXEL_RATIO_CAP = 1.5;
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, PIXEL_RATIO_CAP));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(0x000000, 0);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -62,16 +66,21 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.08));
 const onyx = createOnyx({ radius: 1.55 });
 const core = createCore({ radius: 1.90 });
 const particles = createParticles({
-  count: 2700,
+  count: 2000,
   outerRadius: 2.40,
 });
 
-// Real-time cubemap for the onyx reflections. Rendered each frame from the
-// sphere's center (with the sphere itself hidden during capture), so the
-// cubemap contains the actual surrounding particles + plasma. The sphere's
-// shader looks up this cubemap with the world-space reflection vector, so
+// Real-time cubemap for the onyx reflections. Rendered from the sphere's
+// center (with the sphere itself hidden during capture), so the cubemap
+// contains the actual surrounding particles + plasma. The sphere's shader
+// looks up this cubemap with the world-space reflection vector, so
 // reflections track the world — they don't rotate with the sphere.
-const reflectionTarget = new THREE.WebGLCubeRenderTarget(256, {
+//
+// Resolution 128 (was 256) — 4x fewer pixels per face. Reflections are
+// sampled with low LOD on a glossy surface so the resolution drop is
+// invisible. Combined with every-other-frame updates in the tick loop,
+// this is the single biggest performance win in the scene.
+const reflectionTarget = new THREE.WebGLCubeRenderTarget(128, {
   generateMipmaps: false,
   minFilter: THREE.LinearFilter,
   magFilter: THREE.LinearFilter,
@@ -128,13 +137,15 @@ window.addEventListener('resize', () => {
   renderer.setSize(w, h);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  particles.uniforms.uPixelRatio.value = Math.min(window.devicePixelRatio, 2);
+  particles.uniforms.uPixelRatio.value = Math.min(window.devicePixelRatio, PIXEL_RATIO_CAP);
 });
 
 const clock = new THREE.Clock();
+let frameCount = 0;
 function tick() {
   const dt = clock.getDelta();
   const elapsed = clock.elapsedTime;
+  frameCount++;
 
   // Mood lerp runs first so subsequent updates read the freshly
   // interpolated uniforms (e.g. uDisplacement piped to particles).
@@ -161,12 +172,15 @@ function tick() {
 
   controls.update();
 
-  // Capture the reflection cubemap: hide the onyx so the cube camera only
-  // sees the surrounding particles + plasma, render the 6 faces, then
-  // restore visibility before the main render.
-  onyx.mesh.visible = false;
-  reflectionCamera.update(renderer, scene);
-  onyx.mesh.visible = true;
+  // Capture the reflection cubemap every other frame. The onyx is hidden
+  // so the cube camera only sees particles + plasma. Skipping every other
+  // frame halves cubemap GPU cost; the 1-frame staleness is invisible
+  // because reflections are sampled with low LOD on a glossy surface.
+  if (frameCount % 2 === 0) {
+    onyx.mesh.visible = false;
+    reflectionCamera.update(renderer, scene);
+    onyx.mesh.visible = true;
+  }
 
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
