@@ -6,14 +6,14 @@ import { simplex3d } from './shaders/noise.glsl.js';
 // intersects the onyx the depth test culls it cleanly and where it extends
 // past the silhouette it reads as glowing plasma. Same noise field as the
 // particle cloud so plasma surface bulges and particle motion stay locked.
-export function createCore({ radius = 0.62 } = {}) {
+export function createCore({ radius = 0.93 } = {}) {
   const geometry = new THREE.IcosahedronGeometry(radius, 24);
 
   const uniforms = {
     uTime: { value: 0 },
     uNoiseScale: { value: 1.6 },
     uNoiseSpeed: { value: 0.4 },
-    uDisplacement: { value: 0.18 },
+    uDisplacement: { value: 0.27 },
     uPulse: { value: 0.0 },
     uColorA: { value: new THREE.Color('#6ce0ff') }, // cool cyan
     uColorB: { value: new THREE.Color('#b16cff') }, // violet
