@@ -33,6 +33,14 @@ export function createCore({ radius = 1.90 } = {}) {
     uNoiseScale: { value: 1.4 },
     uNoiseSpeed: { value: 0.28 },
     uDisplacement: { value: 0.30 },
+    // Accumulated noise + flare times. main.js advances these each frame
+    // by dt * (current speed), so when the mood lerps the speed uniforms
+    // the rate of advance changes smoothly without discontinuities in the
+    // sample location. Using uTime * uNoiseSpeed directly would cause the
+    // noise field to "jump" mid-transition because the product jumps when
+    // the multiplier lerps.
+    uNoiseTime: { value: 0 },
+    uFlareTime: { value: 0 },
     // Solar flares: rare bright bulges that drift across the surface.
     // Same noise field is sampled by vertex (for displacement bulge) and
     // fragment (for visual brightness) so the visible flash and the
@@ -59,9 +67,9 @@ export function createCore({ radius = 1.90 } = {}) {
       ${simplex3d}
       uniform float uTime;
       uniform float uNoiseScale;
-      uniform float uNoiseSpeed;
+      uniform float uNoiseTime;
       uniform float uDisplacement;
-      uniform float uFlareSpeed;
+      uniform float uFlareTime;
       uniform float uFlareScale;
       uniform float uFlareDisp;
       uniform float uPulse;
@@ -87,16 +95,18 @@ export function createCore({ radius = 1.90 } = {}) {
       void main() {
         vec3 p = position;
         vec3 dir = normalize(p);
-        float t = uTime * uNoiseSpeed;
+        // uNoiseTime / uFlareTime are accumulated outside the shader so
+        // mood transitions don't cause noise-field jumps.
+        float t = uNoiseTime;
         float n = fbm(p * uNoiseScale + vec3(0.0, t, 0.0));
         float pulse = (0.5 + 0.5 * sin(uTime * 0.8)) * 0.15 + uPulse;
 
         // Solar flare field: low-frequency 3D noise drifting slowly through
-        // a fourth axis (time). High threshold so only the rare crests of
-        // the noise field trigger flares — at any moment 0-3 active spots.
-        // smoothstep -> sharp edges, pow -> sharper still so the active
-        // region is small + bright rather than diffuse.
-        float flareN = fbm(p * uFlareScale + vec3(0.0, 0.0, uTime * uFlareSpeed));
+        // a fourth axis (uFlareTime). High threshold so only the rare
+        // crests of the noise field trigger flares — at any moment 0-3
+        // active spots. smoothstep -> sharp edges, pow -> sharper still
+        // so the active region is small + bright rather than diffuse.
+        float flareN = fbm(p * uFlareScale + vec3(0.0, 0.0, uFlareTime));
         float flare = pow(smoothstep(0.55, 0.80, flareN), 2.0);
 
         float disp = n * uDisplacement + pulse * 0.05 + flare * uFlareDisp;
@@ -252,8 +262,63 @@ export function createCore({ radius = 1.90 } = {}) {
   const mesh = new THREE.Mesh(geometry, material);
   mesh.renderOrder = 1;
 
+  // Halo: a slightly larger sphere with a fresnel-only additive glow.
+  // Renders just outside the plasma silhouette so its rim creates a
+  // wide diffuse aura that bleeds into the dark, visually consistent
+  // with the gaussian halos on the particles. Detail kept low (32) and
+  // the shader is trivial — minimal GPU cost.
+  //
+  // Color uniform shares the same THREE.Color object as the plasma's
+  // uColorHot, so when MoodManager lerps the plasma palette the halo
+  // automatically tracks.
+  const haloGeometry = new THREE.SphereGeometry(radius * 1.20, 32, 32);
+  const haloUniforms = {
+    uTime: uniforms.uTime,
+    uColor: uniforms.uColorHot, // shared reference — auto-updates with mood
+    uIntensity: { value: 0.55 },
+  };
+  const haloMaterial = new THREE.ShaderMaterial({
+    uniforms: haloUniforms,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    side: THREE.FrontSide,
+    blending: THREE.AdditiveBlending,
+    vertexShader: /* glsl */ `
+      varying vec3 vNormal;
+      varying vec3 vViewPos;
+      void main() {
+        vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+        vViewPos = -mvPos.xyz;
+        vNormal = normalize(normalMatrix * normal);
+        gl_Position = projectionMatrix * mvPos;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform float uTime;
+      uniform vec3 uColor;
+      uniform float uIntensity;
+      varying vec3 vNormal;
+      varying vec3 vViewPos;
+      void main() {
+        vec3 V = normalize(vViewPos);
+        float ndv = max(dot(vNormal, V), 0.0);
+        // Wide soft fresnel — bright at the silhouette, fading inward.
+        // pow(_, 2.0) gives a gentle bleed about 25% of the way across
+        // the disc which reads as a generous outer halo.
+        float halo = pow(1.0 - ndv, 2.0);
+        // Subtle breathing modulation so the halo feels alive.
+        float pulse = 0.88 + 0.12 * sin(uTime * 0.7);
+        gl_FragColor = vec4(uColor * halo * pulse, halo * uIntensity);
+      }
+    `,
+  });
+  const halo = new THREE.Mesh(haloGeometry, haloMaterial);
+  halo.renderOrder = 1;
+
   return {
     mesh,
+    halo,
     uniforms,
     update(elapsed, dt) {
       uniforms.uTime.value = elapsed;

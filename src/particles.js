@@ -77,6 +77,11 @@ export function createParticles({
     uEnvBase: { value: 1.90 },
     uEnvDisp: { value: 0.30 },
     uNoiseScale: { value: 1.4 },
+    // Accumulated noise time, set by main.js each frame using the same
+    // integration as the plasma so the surface particles see is the
+    // surface the plasma renders. Not derived from uTime * uNoiseSpeed
+    // because that product jumps when the speed lerps during mood changes.
+    uNoiseTime: { value: 0 },
     uNoiseSpeed: { value: 0.28 },
     // Tangential drift strength — curl noise sweeping particles sideways
     // as they travel outward. Grows with radial progress.
@@ -104,7 +109,7 @@ export function createParticles({
       uniform float uEnvBase;
       uniform float uEnvDisp;
       uniform float uNoiseScale;
-      uniform float uNoiseSpeed;
+      uniform float uNoiseTime;
       uniform float uDrift;
       uniform float uAmbient;
       uniform float uSoftOuter;
@@ -143,7 +148,9 @@ export function createParticles({
       }
 
       void main() {
-        float t = uTime * uNoiseSpeed;
+        // uNoiseTime is accumulated externally so mood-driven changes
+        // to noise speed don't cause the surface field to jump.
+        float t = uNoiseTime;
 
         // Lifecycle. life01 runs 0->1 each cycle. cycleIdx is the discrete
         // cycle number, used to perturb the spawn direction so each cycle
