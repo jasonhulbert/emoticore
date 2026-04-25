@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { createCore } from './core.js';
 import { createOnyx } from './orb.js';
 import { createParticles } from './particles.js';
+import { MoodManager } from './moods.js';
 
 const container = document.getElementById('app');
 
@@ -97,8 +98,23 @@ group.add(core.mesh);
 group.add(particles.points);
 scene.add(group);
 
-window.addEventListener('pointerdown', () => {
+// Pokes only fire on canvas taps so the mood buttons can be clicked
+// without also pulsing the core every time.
+renderer.domElement.addEventListener('pointerdown', () => {
   core.poke(0.6);
+});
+
+// Mood manager — smoothly lerps a curated set of plasma/particle/onyx
+// uniforms toward a named target each frame.
+const moods = new MoodManager({ core, particles, onyx, transitionSeconds: 1.5 });
+
+const moodButtons = document.querySelectorAll('#moods button');
+moodButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    moodButtons.forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    moods.setMood(btn.dataset.mood);
+  });
 });
 
 window.addEventListener('resize', () => {
@@ -114,6 +130,10 @@ const clock = new THREE.Clock();
 function tick() {
   const dt = clock.getDelta();
   const elapsed = clock.elapsedTime;
+
+  // Mood lerp runs first so subsequent updates read the freshly
+  // interpolated uniforms (e.g. uDisplacement piped to particles).
+  moods.update(dt);
 
   core.update(elapsed, dt);
   particles.update(elapsed);
