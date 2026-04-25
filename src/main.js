@@ -58,9 +58,9 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.08));
 const onyx = createOnyx({ radius: 0.55 });
 const core = createCore({ radius: 1.15 });
 const particles = createParticles({
-  count: 1800,
+  count: 2700,
   innerRadius: 1.00,
-  outerRadius: 1.90,
+  outerRadius: 2.30,
 });
 
 core.mesh.renderOrder = 1;
