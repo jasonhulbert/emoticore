@@ -4,7 +4,9 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { createCore } from './core.js';
 import { createOnyx } from './orb.js';
 import { createParticles } from './particles.js';
+import { createSynapses } from './synapses.js';
 import { MoodManager } from './moods.js';
+import { createTuningPanel } from './tune.js';
 
 const container = document.getElementById('app');
 
@@ -69,6 +71,14 @@ const particles = createParticles({
   count: 2000,
   outerRadius: 2.40,
 });
+// Synapse arcs live just outside the plasma surface — they read as
+// discharges between adjacent corona regions, so they sit in the same
+// shell the inner particles travel through.
+// Plasma envelope max is uEnvBase(1.90) + uEnvDisp(0.30) = 2.20; place
+// arcs comfortably past that so flare crests can't occlude them, while
+// still well inside the particle outer fade (2.40).
+const SYNAPSE_BASE_RADIUS = 2.28;
+const synapses = createSynapses({ surfaceRadius: SYNAPSE_BASE_RADIUS });
 
 // Real-time cubemap for the onyx reflections. Rendered from the sphere's
 // center (with the sphere itself hidden during capture), so the cubemap
@@ -115,6 +125,7 @@ group.add(core.mesh);
 // silhouette — light emitting from the center outward.
 group.add(core.glow);
 group.add(particles.points);
+group.add(synapses.mesh);
 scene.add(group);
 
 // Glow size baseline; main.js scales it each frame to track moods.plasmaScale
@@ -129,7 +140,9 @@ renderer.domElement.addEventListener('pointerdown', () => {
 
 // Mood manager — smoothly lerps a curated set of plasma/particle/onyx
 // uniforms toward a named target each frame.
-const moods = new MoodManager({ core, particles, onyx, transitionSeconds: 1.5 });
+const moods = new MoodManager({ core, particles, onyx, synapses, transitionSeconds: 1.5 });
+
+createTuningPanel({ moods, synapses });
 
 const moodButtons = document.querySelectorAll('#moods button');
 moodButtons.forEach((btn) => {
@@ -147,6 +160,7 @@ window.addEventListener('resize', () => {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   particles.uniforms.uPixelRatio.value = Math.min(window.devicePixelRatio, PIXEL_RATIO_CAP);
+  synapses.uniforms.uPixelRatio.value = Math.min(window.devicePixelRatio, PIXEL_RATIO_CAP);
 });
 
 const clock = new THREE.Clock();
@@ -192,6 +206,13 @@ function tick() {
   // Glow billboard scales with the plasma so the aura swells and
   // contracts with the visible mesh.
   core.glow.material.uniforms.uSize.value = GLOW_BASE_SIZE * ps;
+
+  // Synapse discharge rate tracks particle drift (mood activity); the
+  // arc shell scales with the plasma so discharges always sit just
+  // outside the visible surface.
+  synapses.setEnergy(moods.synapseRate, moods.synapseBurst);
+  synapses.uniforms.uRadius.value = SYNAPSE_BASE_RADIUS * ps;
+  synapses.update(elapsed, dt);
 
   group.rotation.y = Math.sin(elapsed * 0.15) * 0.15;
   group.position.y = Math.sin(elapsed * 0.6) * 0.02;
