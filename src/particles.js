@@ -274,9 +274,11 @@ export function createParticles({
         gl_Position = projectionMatrix * mvPosition;
 
         float size = aSize * (1.0 + vSpeed * 0.4);
-        // Smaller particles overall — max 22px, so they read as fine
-        // glittering dust rather than fat cartoon blobs.
-        gl_PointSize = clamp(size * uPixelRatio * (80.0 / -mvPosition.z), 1.0, 22.0);
+        // Bigger sprite footprint than before (max 32px vs 22) so the
+        // wider halo gaussian has room to bloom past the bright core
+        // before being clipped by the point disc — the halo is what
+        // produces the glow, so the disc has to fit it.
+        gl_PointSize = clamp(size * uPixelRatio * (95.0 / -mvPosition.z), 1.0, 32.0);
       }
     `,
     fragmentShader: /* glsl */ `
@@ -302,19 +304,20 @@ export function createParticles({
         float d = length(uv);
         if (d > 0.5) discard;
 
-        // Wider halo (coefficient 4 vs previous 7) for more visible glow
-        // bleeding into surrounding pixels. Core stays tight at 70.
+        // Even wider halo (coefficient 2.5 vs 4) so the glow extends
+        // most of the way to the edge of the point disc. Core stays
+        // tight at 70 so the lit point itself remains pixel-sharp.
         float core = exp(-d * d * 70.0);
-        float halo = exp(-d * d * 4.0);
+        float halo = exp(-d * d * 2.5);
 
         // Glow boost: pow(vLife, 0.6) rises faster than vLife so the halo
         // peaks while the particle is mid-life, then drops sharply as it
-        // dies. This is the "fluctuates with brightness" behavior — glow
-        // and brightness now ride the same curve but glow is amplified.
+        // dies. Halo intensity coefficients further bumped here so the
+        // glow is the dominant visual element, not the core.
         float glowBoost = pow(max(vLife, 0.0), 0.6);
 
-        float dustShape  = exp(-d * d * 14.0) * 0.55 + halo * (0.20 + 0.25 * glowBoost);
-        float sparkShape = core * 1.00 + halo * (0.30 + 0.45 * glowBoost);
+        float dustShape  = exp(-d * d * 14.0) * 0.55 + halo * (0.40 + 0.65 * glowBoost);
+        float sparkShape = core * 1.00 + halo * (0.65 + 1.00 * glowBoost);
         float intensity  = mix(dustShape, sparkShape, vSpark);
 
         // Particles riding the plasma surface, or moving fast in ambient
