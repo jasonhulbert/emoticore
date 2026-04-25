@@ -31,7 +31,18 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   100,
 );
-camera.position.set(0, 0.1, 6.0);
+// Initial camera distance: pull back enough to fit the orb's outer
+// corona horizontally on narrow viewports. Wide desktops use the
+// default 6.0; portrait phones (aspect ~0.5) end up around z ~ 12 so
+// the whole sphere is visible without the user having to zoom out.
+{
+  const aspect = window.innerWidth / window.innerHeight;
+  const halfTanFov = Math.tan((40 * Math.PI / 180) / 2);
+  const orbExtent = 2.4; // particle outer fade radius
+  const dForWidth = orbExtent / (halfTanFov * aspect);
+  const initialZ = Math.max(6.0, dForWidth);
+  camera.position.set(0, 0.1, initialZ);
+}
 
 // Subtle env map for the polished onyx highlights — kept dim so the stone
 // reads as solid mass, not a chrome ball.
