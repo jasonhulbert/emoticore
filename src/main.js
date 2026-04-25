@@ -85,9 +85,14 @@ onyx.uniforms.uEnvMap.value = reflectionTarget.texture;
 core.mesh.renderOrder = 1;
 particles.points.renderOrder = 2;
 
-// Lock the particle shader's view of the plasma surface to the actual
-// envelope: same base radius, displacement, noise scale, and time speed.
-particles.uniforms.uEnvBase.value = 1.90;
+// Baseline radii for the plasma surface envelope (object space). Particle
+// uniforms tracking the plasma surface are recomputed each frame as
+// (baseline * moods.plasmaScale) so they follow mesh scaling.
+const PLASMA_BASE_RADIUS = 1.90;
+const PARTICLE_OUTER_RADIUS = 2.40;
+const PARTICLE_FADE_RADIUS = 2.60;
+
+particles.uniforms.uEnvBase.value = PLASMA_BASE_RADIUS;
 particles.uniforms.uEnvDisp.value = core.uniforms.uDisplacement.value;
 particles.uniforms.uNoiseScale.value = core.uniforms.uNoiseScale.value;
 particles.uniforms.uNoiseSpeed.value = core.uniforms.uNoiseSpeed.value;
@@ -139,12 +144,17 @@ function tick() {
   particles.update(elapsed);
   onyx.uniforms.uTime.value = elapsed;
 
-  // Pulse the plasma's displacement on click — both the plasma shader and
-  // the particle shader read uEnvDisp / uDisplacement as the same value,
-  // so a click physically swells the plasma surface and the impenetrable-
-  // boundary clamp pushes the corona outward in response.
+  // Sync the particle shader's view of the plasma surface every frame so
+  // it tracks both (a) click pokes (uPulse decay) and (b) the mood-driven
+  // mesh scaling. uEnvBase + uEnvDisp + outer-fade radii all multiply by
+  // plasmaScale because the visible plasma surface in world space is
+  // (object-space surface) × mesh.scale.
+  const ps = moods.plasmaScale;
+  particles.uniforms.uEnvBase.value = PLASMA_BASE_RADIUS * ps;
   particles.uniforms.uEnvDisp.value =
-    core.uniforms.uDisplacement.value + core.uniforms.uPulse.value * 0.15;
+    (core.uniforms.uDisplacement.value + core.uniforms.uPulse.value * 0.15) * ps;
+  particles.uniforms.uSoftOuter.value = PARTICLE_OUTER_RADIUS * ps;
+  particles.uniforms.uFadeRadius.value = PARTICLE_FADE_RADIUS * ps;
 
   group.rotation.y = Math.sin(elapsed * 0.15) * 0.15;
   group.position.y = Math.sin(elapsed * 0.6) * 0.02;
