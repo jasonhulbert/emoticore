@@ -222,7 +222,11 @@ export function createParticles({
         gl_Position = projectionMatrix * mvPosition;
 
         float size = aSize * (1.0 + vSpeed * 0.5);
-        gl_PointSize = clamp(size * uPixelRatio * (160.0 / -mvPosition.z), 1.0, 90.0);
+        // Sharper max cap: at the previous 90px the gaussian-shaded core
+        // was spread across 50+ pixels and read as a soft cotton blob.
+        // At 55px the core occupies a tight 15-20 pixels with the halo +
+        // star-spike pattern around it, so the structure is visible.
+        gl_PointSize = clamp(size * uPixelRatio * (140.0 / -mvPosition.z), 1.0, 55.0);
       }
     `,
     fragmentShader: /* glsl */ `
@@ -236,26 +240,54 @@ export function createParticles({
       varying float vInfluence;
       varying float vDistance;
 
+      // Particle shading is composed of three layers, the same approach
+      // used on the plasma surface — each particle reads as a lit point
+      // rather than a soft disc.
+      //
+      //   1. Hot core: tight gaussian (exp(-d² · 80)) — pixel-sharp at the
+      //      center, ~20% of disc radius. Reads as the actual hot point.
+      //   2. Halo: wider gaussian (exp(-d² · 6)) — soft outer glow that
+      //      gives the particle a sense of light spilling into space.
+      //   3. Star spikes: 4-pointed cross, only sparks. Classic lens-flare
+      //      shape; cos(2θ) raised to a high power picks out sharp peaks
+      //      along the diagonal cross axes, multiplied by a radial fade
+      //      so the spikes are anchored at the core.
+      //
+      // Dust particles get a softer base + small core; spark particles get
+      // the full bright core + halo + spikes treatment.
       void main() {
         vec2 uv = gl_PointCoord - 0.5;
         float d = length(uv);
         if (d > 0.5) discard;
 
-        float dust = exp(-d * d * 12.0);
-        float halo = smoothstep(0.5, 0.05, d);
-        float shape = mix(dust * 0.7 + halo * 0.25, dust * 0.4 + pow(halo, 2.5), vSpark);
+        float core = exp(-d * d * 80.0);
+        float halo = exp(-d * d * 6.0);
 
-        // Particles riding the plasma surface lean warm / spark-colored —
-        // they're hotter and faster than ambient dust drifting in the dark.
+        float angle = atan(uv.y, uv.x);
+        float crossPattern = pow(abs(cos(angle * 2.0)), 18.0);
+        float spikes = crossPattern * smoothstep(0.5, 0.04, d);
+
+        float dustShape  = exp(-d * d * 14.0) * 0.65 + halo * 0.10;
+        float sparkShape = core * 1.00 + halo * 0.22 + spikes * 0.55;
+        float intensity  = mix(dustShape, sparkShape, vSpark);
+
+        // Particles riding the plasma surface, or moving fast in ambient
+        // curl, glow warmer; sparks pull toward white.
         float warmth = clamp(vSpeed * 0.7 + vInfluence * 0.6, 0.0, 1.0);
         vec3 col = mix(uColorCool, uColorWarm, warmth);
         col = mix(col, uSpark, vSpark * 0.7);
+
+        // Subtle chromatic edge: the outer halo carries a touch of cool
+        // blue, mimicking the chromatic aberration of a real bright point
+        // through a lens. Adds a "lit" feel rather than flat additive blur.
+        float chroma = max(halo - core, 0.0);
+        col = mix(col, col * vec3(0.65, 0.85, 1.15), chroma * 0.35);
 
         // Soft alpha fade based on absolute distance from origin — particles
         // that drift far from the cloud's natural envelope feather to black
         // instead of being clamped onto a hard sphere.
         float edgeFade = 1.0 - smoothstep(0.85, 1.25, vRadial);
-        float alpha = shape * (0.30 + 0.55 * edgeFade);
+        float alpha = intensity * (0.40 + 0.50 * edgeFade);
 
         gl_FragColor = vec4(col, alpha);
       }
