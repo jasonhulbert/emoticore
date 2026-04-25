@@ -8,113 +8,114 @@ import * as THREE from 'three';
 // Color values are written as hex strings; resolved to THREE.Color objects
 // once at construction so the per-frame loop doesn't allocate.
 const MOODS = {
+  // Cool blue-white serene standby. Slow plasma motion, infrequent
+  // gentle flares — the orb at rest, ready.
   idle: {
     plasma: {
-      uNoiseSpeed: 0.28,
-      uDisplacement: 0.30,
-      uFlareSpeed: 0.30,
-      uFlareDisp: 0.12,
-      uColorEmber: '#1a0500',
-      uColorAmber: '#ff5e10',
-      uColorHot:   '#ffb050',
-      uColorSpark: '#fff4cc',
+      uNoiseSpeed: 0.20,
+      uDisplacement: 0.26,
+      uFlareSpeed: 0.15,
+      uFlareDisp: 0.06,
+      uColorEmber: '#020618',
+      uColorAmber: '#1864c8',
+      uColorHot:   '#80c8ff',
+      uColorSpark: '#f0faff',
     },
     particles: {
-      uDrift: 0.45,
-      uAmbient: 0.20,
-      uColorCool: '#7fd8ff',
-      uColorWarm: '#ffb36c',
-      uSpark:     '#fff4d8',
+      uDrift: 0.32,
+      uAmbient: 0.18,
+      uColorCool: '#80c0ff',
+      uColorWarm: '#c0e0ff',
+      uSpark:     '#ffffff',
     },
     onyx: {
-      uEnvIntensity: 1.6,
-      uWaveStrength: 0.45,
-      uBaseColor: '#04060a',
-      uWaveColor: '#ff7a18',
+      uEnvIntensity: 1.4,
+      uWaveStrength: 0.35,
+      uBaseColor: '#020414',
+      uWaveColor: '#4080d0',
     },
   },
 
-  // Slow, deep, contemplative. Cool blue-violet palette, reduced flares,
-  // softer plasma motion — like the orb is processing something.
+  // Deep blue-violet, very slow, rare flares — contemplative.
   thinking: {
     plasma: {
-      uNoiseSpeed: 0.16,
-      uDisplacement: 0.22,
-      uFlareSpeed: 0.10,
-      uFlareDisp: 0.05,
-      uColorEmber: '#040218',
-      uColorAmber: '#3548a8',
-      uColorHot:   '#7080ff',
-      uColorSpark: '#d8d0ff',
+      uNoiseSpeed: 0.14,
+      uDisplacement: 0.20,
+      uFlareSpeed: 0.08,
+      uFlareDisp: 0.04,
+      uColorEmber: '#06021a',
+      uColorAmber: '#4030a8',
+      uColorHot:   '#8068ff',
+      uColorSpark: '#d8c8ff',
     },
     particles: {
-      uDrift: 0.30,
-      uAmbient: 0.14,
-      uColorCool: '#6080ff',
-      uColorWarm: '#a090ff',
+      uDrift: 0.26,
+      uAmbient: 0.13,
+      uColorCool: '#6048d0',
+      uColorWarm: '#a890ff',
       uSpark:     '#e8e0ff',
     },
     onyx: {
-      uEnvIntensity: 1.2,
-      uWaveStrength: 0.35,
-      uBaseColor: '#040618',
-      uWaveColor: '#5060d8',
+      uEnvIntensity: 1.1,
+      uWaveStrength: 0.30,
+      uBaseColor: '#060418',
+      uWaveColor: '#5040d0',
     },
   },
 
-  // Fast, bright, very warm. Frequent flares, larger displacement —
-  // active and energetic.
+  // Hot orange-YELLOW (no red push so it stays distinct from alert).
+  // Fast plasma, frequent big flares — energetic and active.
   excited: {
     plasma: {
       uNoiseSpeed: 0.50,
-      uDisplacement: 0.40,
+      uDisplacement: 0.42,
       uFlareSpeed: 0.55,
-      uFlareDisp: 0.20,
-      uColorEmber: '#200400',
-      uColorAmber: '#ff3010',
-      uColorHot:   '#ffd040',
-      uColorSpark: '#ffffe0',
+      uFlareDisp: 0.22,
+      uColorEmber: '#100600',
+      uColorAmber: '#ff8020',
+      uColorHot:   '#ffd840',
+      uColorSpark: '#ffffd0',
     },
     particles: {
       uDrift: 0.65,
       uAmbient: 0.32,
-      uColorCool: '#ff8050',
-      uColorWarm: '#ffc060',
-      uSpark:     '#ffffe0',
+      uColorCool: '#ffa050',
+      uColorWarm: '#ffd060',
+      uSpark:     '#ffffd0',
     },
     onyx: {
       uEnvIntensity: 2.0,
       uWaveStrength: 0.65,
-      uBaseColor: '#0a0400',
-      uWaveColor: '#ff5010',
+      uBaseColor: '#0a0500',
+      uWaveColor: '#ff8020',
     },
   },
 
-  // Sharp, electric, intense. Cold-white / cyan tones, very frequent
-  // flares — heightened attention.
+  // Deep saturated red, the universal warning color. Sharp motion +
+  // very frequent flares for urgency.
   alert: {
     plasma: {
-      uNoiseSpeed: 0.42,
+      uNoiseSpeed: 0.45,
       uDisplacement: 0.34,
-      uFlareSpeed: 0.70,
+      uFlareSpeed: 0.75,
       uFlareDisp: 0.18,
-      uColorEmber: '#001020',
-      uColorAmber: '#3088c8',
-      uColorHot:   '#a0e0ff',
-      uColorSpark: '#ffffff',
+      uColorEmber: '#1a0200',
+      uColorAmber: '#c01010',
+      uColorHot:   '#ff4020',
+      uColorSpark: '#ffd870',
     },
     particles: {
       uDrift: 0.55,
       uAmbient: 0.28,
-      uColorCool: '#a0d8ff',
-      uColorWarm: '#e0f0ff',
-      uSpark:     '#ffffff',
+      uColorCool: '#ff5030',
+      uColorWarm: '#ff8040',
+      uSpark:     '#ffe080',
     },
     onyx: {
-      uEnvIntensity: 1.8,
+      uEnvIntensity: 1.7,
       uWaveStrength: 0.55,
-      uBaseColor: '#020812',
-      uWaveColor: '#80c8ff',
+      uBaseColor: '#100200',
+      uWaveColor: '#e02010',
     },
   },
 };
