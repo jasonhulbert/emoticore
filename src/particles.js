@@ -15,12 +15,12 @@ import { simplex3d } from './shaders/noise.glsl.js';
 // Particles are also strictly impenetrable: any position inside the plasma
 // surface gets clamped to surface + ε, like dust around a fluid boundary.
 export function createParticles({
-  count = 1800,
+  count = 2700,
   // Inner radius is intentionally *inside* the plasma's max bulge so the
   // impenetrable-surface clamp fires every frame for some particles —
   // bulges literally sweep dust outward, the most visible coupling effect.
   innerRadius = 1.00,
-  outerRadius = 1.90,
+  outerRadius = 2.30,
 } = {}) {
   const geometry = new THREE.BufferGeometry();
 
@@ -33,9 +33,10 @@ export function createParticles({
   const brightnesses = new Float32Array(count);
 
   for (let i = 0; i < count; i++) {
-    // Bias inward so the corona is densest just outside the plasma surface,
-    // where the coupling is strongest, and feathers out into the dark.
-    const u = Math.pow(Math.random(), 1.6);
+    // Mild inward bias — densest just outside the plasma surface but with
+    // enough particles spread across the full radial range that there is
+    // visible distance variation in the cloud.
+    const u = Math.pow(Math.random(), 1.3);
     const r = innerRadius + u * (outerRadius - innerRadius);
     const theta = Math.acos(2 * Math.random() - 1);
     const phi = 2 * Math.PI * Math.random();
@@ -93,11 +94,12 @@ export function createParticles({
     // Outer containment: a soft elastic clamp rather than a hard pin, so
     // particles can't fly off but the boundary doesn't read as a perfect
     // sphere either. uOuter is the hard cap (rare), uSoftOuter is where
-    // exponential repulsion begins so most particles get gently pushed
-    // back inward as they approach the cap.
+    // exponential repulsion begins. Wider gap (0.4 vs the previous 0.25)
+    // gives particles a deeper "elastic zone" to drift through, which is
+    // what produces the visible distance variation across the cloud.
     uSoftOuter: { value: outerRadius },
-    uOuter: { value: outerRadius + 0.25 },
-    uFadeRadius: { value: outerRadius + 0.1 },
+    uOuter: { value: outerRadius + 0.4 },
+    uFadeRadius: { value: outerRadius + 0.2 },
     uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
     uColorCool: { value: new THREE.Color('#7fd8ff') },
     uColorWarm: { value: new THREE.Color('#ffb36c') },
@@ -290,19 +292,29 @@ export function createParticles({
       varying float vLife;
       varying float vBrightness;
 
-      // Each particle is a tight gaussian with a soft halo. No star spikes —
-      // those read as cartoonish lens-flare stickers at this scale. Just a
-      // bright lit pinpoint with a faint surrounding glow.
+      // Each particle is a tight gaussian core wrapped in a wide soft halo
+      // that emits visible glow proportional to the particle's brightness.
+      // The halo's contribution is amplified non-linearly with vLife so the
+      // glow dramatically blooms when the particle is at peak life and
+      // collapses as it fades — every individual particle visibly breathes.
       void main() {
         vec2 uv = gl_PointCoord - 0.5;
         float d = length(uv);
         if (d > 0.5) discard;
 
+        // Wider halo (coefficient 4 vs previous 7) for more visible glow
+        // bleeding into surrounding pixels. Core stays tight at 70.
         float core = exp(-d * d * 70.0);
-        float halo = exp(-d * d * 7.0);
+        float halo = exp(-d * d * 4.0);
 
-        float dustShape  = exp(-d * d * 14.0) * 0.65 + halo * 0.08;
-        float sparkShape = core * 1.00 + halo * 0.20;
+        // Glow boost: pow(vLife, 0.6) rises faster than vLife so the halo
+        // peaks while the particle is mid-life, then drops sharply as it
+        // dies. This is the "fluctuates with brightness" behavior — glow
+        // and brightness now ride the same curve but glow is amplified.
+        float glowBoost = pow(max(vLife, 0.0), 0.6);
+
+        float dustShape  = exp(-d * d * 14.0) * 0.55 + halo * (0.20 + 0.25 * glowBoost);
+        float sparkShape = core * 1.00 + halo * (0.30 + 0.45 * glowBoost);
         float intensity  = mix(dustShape, sparkShape, vSpark);
 
         // Particles riding the plasma surface, or moving fast in ambient
@@ -323,7 +335,7 @@ export function createParticles({
 
         // vLife (lifecycle bell curve) and vBrightness (per-particle base
         // brightness, ~0.7-1.0) combine for the final attenuation. With
-        // 1800 particles all on independent cycles, at any moment some are
+        // 2700 particles all on independent cycles, at any moment some are
         // bright, some are fading, some are dark — the cloud reads as
         // continuously regenerating instead of a static pattern.
         float alpha = intensity * (0.40 + 0.50 * edgeFade) * vLife * vBrightness;
