@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>emoticore</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: radial-gradient(ellipse at center, #0b0f1a 0%, #04060b 100%);
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+        color: #8aa;
+      }
+      #app {
+        position: fixed;
+        inset: 0;
+      }
+      .hint {
+        position: fixed;
+        bottom: 14px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 12px;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        opacity: 0.4;
+        pointer-events: none;
+        user-select: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div class="hint">drag to orbit · scroll to zoom</div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
