@@ -46,7 +46,7 @@ export function createParticles({
     // Per-particle orbit rate (and sign) so the cloud doesn't rotate as a
     // rigid sphere — different particles travel at different angular speeds
     // and some go counter-clockwise, breaking up the uniform pattern.
-    rates[i] = (Math.random() - 0.5) * 0.4;
+    rates[i] = (Math.random() - 0.5) * 0.18;
   }
 
   geometry.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 3));
@@ -71,14 +71,16 @@ export function createParticles({
     uEnvSweep: { value: 1.10 },
     uEnvPush: { value: 1.40 },
     uEnvFalloff: { value: 2.2 },
-    // Background curl-noise drift far from the surface. Bumped substantially
-    // so far-out particles are not visibly static — without this, only the
-    // inner band moves and the outer cloud reads as a frozen sphere shell.
-    uAmbientFlow: { value: 0.55 },
-    // Soft cap radius for fragment-shader fade only — there is no hard
-    // outer clamp on position any more, so particles disperse naturally
-    // into the dark instead of pinning to a sphere.
-    uFadeRadius: { value: outerRadius + 0.4 },
+    // Background curl-noise drift far from the surface.
+    uAmbientFlow: { value: 0.28 },
+    // Outer containment: a soft elastic clamp rather than a hard pin, so
+    // particles can't fly off but the boundary doesn't read as a perfect
+    // sphere either. uOuter is the hard cap (rare), uSoftOuter is where
+    // exponential repulsion begins so most particles get gently pushed
+    // back inward as they approach the cap.
+    uSoftOuter: { value: outerRadius },
+    uOuter: { value: outerRadius + 0.25 },
+    uFadeRadius: { value: outerRadius + 0.1 },
     uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
     uColorCool: { value: new THREE.Color('#7fd8ff') },
     uColorWarm: { value: new THREE.Color('#ffb36c') },
@@ -102,6 +104,8 @@ export function createParticles({
       uniform float uEnvPush;
       uniform float uEnvFalloff;
       uniform float uAmbientFlow;
+      uniform float uSoftOuter;
+      uniform float uOuter;
       uniform float uFadeRadius;
       uniform float uPixelRatio;
 
@@ -186,12 +190,25 @@ export function createParticles({
         pos += dir * max(surfVel, 0.0) * uEnvPush * influence;
 
         // Impenetrable plasma surface: any position inside surf + ε gets
-        // pushed back out to the surface. No outer clamp — particles are
-        // free to disperse into the dark, fade handled in fragment shader.
+        // pushed back out to the surface.
         float minRadius = surf + 0.04;
         float L = length(pos);
         if (L < minRadius) {
           pos = (pos / L) * minRadius;
+          L = minRadius;
+        }
+
+        // Soft elastic outer containment. Past uSoftOuter, particles are
+        // pulled radially inward by an exponentially growing force that
+        // hits a hard wall at uOuter. Result: the bulk of the cloud sits
+        // inside uSoftOuter without forming a sharp sphere boundary, but
+        // nothing escapes to infinity.
+        if (L > uSoftOuter) {
+          float over = L - uSoftOuter;
+          float pullback = 1.0 - exp(-over * 6.0);
+          float maxOver = uOuter - uSoftOuter;
+          float clampedOver = min(over * (1.0 - pullback), maxOver);
+          pos = (pos / L) * (uSoftOuter + clampedOver);
         }
 
         // Final velocity proxy for shading — particles strongly coupled to

@@ -36,7 +36,9 @@ controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.enablePan = false;
 controls.minDistance = 1.6;
-controls.maxDistance = 9.0;
+// Allow zooming way out so the orb compresses into a small bright ball of
+// energy around the onyx — the "potential energy contained" reading.
+controls.maxDistance = 28.0;
 
 // Cool rim from one side, warm key from the other — gives the onyx two
 // distinct highlight tones so it never looks flat.
