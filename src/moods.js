@@ -8,8 +8,7 @@ import * as THREE from 'three';
 // Color values are written as hex strings; resolved to THREE.Color objects
 // once at construction so the per-frame loop doesn't allocate.
 const MOODS = {
-  // Cool blue-white serene standby. Slow plasma motion, infrequent
-  // gentle flares — the orb at rest, ready.
+  // Cool blue-white serene standby. Baseline geometry size.
   idle: {
     plasma: {
       uNoiseSpeed: 0.20,
@@ -34,9 +33,11 @@ const MOODS = {
       uBaseColor: '#020414',
       uWaveColor: '#4080d0',
     },
+    scale: { onyx: 1.00, plasma: 1.00 },
   },
 
-  // Deep blue-violet, very slow, rare flares — contemplative.
+  // Deep blue-violet, drawn inward. Both onyx and plasma contract
+  // slightly — introspective, focused.
   thinking: {
     plasma: {
       uNoiseSpeed: 0.14,
@@ -61,10 +62,11 @@ const MOODS = {
       uBaseColor: '#060418',
       uWaveColor: '#5040d0',
     },
+    scale: { onyx: 0.92, plasma: 0.94 },
   },
 
-  // Hot orange-YELLOW (no red push so it stays distinct from alert).
-  // Fast plasma, frequent big flares — energetic and active.
+  // Hot orange-yellow, expanded. Plasma swells more than the onyx so
+  // the energy halo widens — bursting outward.
   excited: {
     plasma: {
       uNoiseSpeed: 0.50,
@@ -89,10 +91,11 @@ const MOODS = {
       uBaseColor: '#0a0500',
       uWaveColor: '#ff8020',
     },
+    scale: { onyx: 1.04, plasma: 1.10 },
   },
 
-  // Deep saturated red, the universal warning color. Sharp motion +
-  // very frequent flares for urgency.
+  // Deep saturated red. Onyx contracts slightly while plasma swells —
+  // tense readiness, energy field puffed out around a denser core.
   alert: {
     plasma: {
       uNoiseSpeed: 0.45,
@@ -117,6 +120,7 @@ const MOODS = {
       uBaseColor: '#100200',
       uWaveColor: '#e02010',
     },
+    scale: { onyx: 0.97, plasma: 1.07 },
   },
 };
 
@@ -133,11 +137,21 @@ export class MoodManager {
     }
     this.currentName = 'idle';
     this.target = this.targets.idle;
+    // Currently applied scale values — start at idle (1.0/1.0) and lerp
+    // toward target each frame. Exposed so main.js can scale dependent
+    // particle uniforms (uEnvBase, uSoftOuter, etc.) to track the plasma.
+    this.onyxScale = this.target.scale.onyx;
+    this.plasmaScale = this.target.scale.plasma;
   }
 
   _resolve(def) {
     const out = {};
     for (const [section, params] of Object.entries(def)) {
+      if (section === 'scale') {
+        // Numeric pair, no color resolution needed.
+        out[section] = { ...params };
+        continue;
+      }
       out[section] = {};
       for (const [key, val] of Object.entries(params)) {
         out[section][key] = typeof val === 'string'
@@ -162,6 +176,15 @@ export class MoodManager {
     this._lerpSection(this.systems.core.uniforms, this.target.plasma, alpha);
     this._lerpSection(this.systems.particles.uniforms, this.target.particles, alpha);
     this._lerpSection(this.systems.onyx.uniforms, this.target.onyx, alpha);
+
+    // Lerp scales and apply to mesh transforms. The plasma's surface
+    // physics (uEnvBase / uEnvDisp / uSoftOuter etc.) are scaled by
+    // main.js using plasmaScale so the particle shader's view of the
+    // surface tracks the visible mesh.
+    this.onyxScale   += (this.target.scale.onyx   - this.onyxScale)   * alpha;
+    this.plasmaScale += (this.target.scale.plasma - this.plasmaScale) * alpha;
+    this.systems.onyx.mesh.scale.setScalar(this.onyxScale);
+    this.systems.core.mesh.scale.setScalar(this.plasmaScale);
   }
 
   _lerpSection(uniforms, target, alpha) {
