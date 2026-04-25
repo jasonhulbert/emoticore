@@ -158,56 +158,60 @@ export function createCore({ radius = 1.90 } = {}) {
       void main() {
         vec3 viewDir = normalize(vViewPosition);
         float ndv = max(dot(vNormal, viewDir), 0.0);
-        float fresnel = pow(1.0 - ndv, 2.0);
 
-        // (1) Temperature: rises with the noise displacement so peaks are
-        // hotter than troughs.
-        float temp = smoothstep(-0.18, 0.20, vDisplacement);
+        // Softer fresnel exponent (was 2.0). A wider falloff spreads the
+        // rim glow across more of the surface so the silhouette transition
+        // reads as a soft halo bleed rather than a sharp lit edge —
+        // visually consistent with the gaussian halo on every particle.
+        float fresnel = pow(1.0 - ndv, 1.1);
 
-        // (3) Internal veins — low-frequency noise on the surface direction
-        // animated independently from the main displacement, gives the
-        // sense of subsurface energy channels flickering under the skin.
+        // (1) Temperature: smoothed transition (was 0.20) gives a softer
+        // peak-to-trough hand-off so bulges don't read as sharp ridges.
+        float temp = smoothstep(-0.20, 0.28, vDisplacement);
+
+        // (3) Internal veins — softened threshold (pow 3.0 -> 1.8) so the
+        // veins read as wide diffuse glow channels instead of crisp lines.
         float t2 = uTime * 0.55;
         float vein = fbm4(vSurfaceDir * 5.5 + vec3(0.0, t2, 0.0));
-        float veins = pow(max(vein * 1.4, 0.0), 3.0);
+        float veins = pow(max(vein * 1.4, 0.0), 1.8);
 
-        // (4) Mid-frequency surface ripple — soft warm shimmer over the
-        // plasma body, the slow fluid layer. fbm3 instead of fbm4: top
-        // octave at scale 9 * 8 = 72 is sub-pixel anyway.
+        // (4) Mid-frequency surface ripple — softened (pow 3.0 -> 1.8)
+        // for a wider, fuzzier shimmer across the body.
         float rippleN = fbm3(vSurfaceDir * 9.0 + vec3(t2 * 1.6, 0.0, 7.3));
-        float ripple = pow(max(rippleN * 1.3, 0.0), 3.0);
+        float ripple = pow(max(rippleN * 1.3, 0.0), 1.8);
 
-        // (5) High-frequency electric crackle — sharp threshold gives
-        // brief brilliant filaments that flash across the surface,
-        // riding on top of the smoother ripple layer. fbm3 — top octave
-        // at scale 18 * 8 = 144 is well below pixel resolution.
+        // (5) High-frequency electric crackle — softened threshold
+        // (pow 6.0 -> 3.5) so filaments are wider, fuzzier strokes
+        // rather than razor-sharp electric arcs. They still flash but
+        // they read as "diffuse light" not "lightning bolt".
         float crackleN = fbm3(vSurfaceDir * 18.0 + vec3(t2 * 3.5, 11.2, 0.0));
-        float crackle = pow(max(crackleN * 1.6, 0.0), 6.0);
+        float crackle = pow(max(crackleN * 1.6, 0.0), 3.5);
 
         // Color buildup: ember base at troughs -> amber at the body ->
         // hot rim at fresnel grazing -> spark filaments on top of that.
         vec3 col = mix(uColorEmber, uColorAmber, temp);
-        col = mix(col, uColorHot, fresnel * 1.00);
+        col = mix(col, uColorHot, fresnel * 0.85);
 
         // Hot bias on the bulge centers (high temp + low fresnel) so the
         // peaks glow from within rather than only at their silhouette.
         col += uColorHot * temp * (1.0 - fresnel) * 0.55;
 
-        // Body emission boost — every part of the surface emits a low
-        // amber baseline so the plasma reads as glowing volume rather
-        // than a thin shell.
-        col += uColorAmber * 0.18;
+        // Body emission boost — bumped (0.18 -> 0.30) so the plasma
+        // reads as a uniformly glowing volume that fades smoothly from
+        // body to silhouette, rather than a textured surface with bright
+        // rim accents.
+        col += uColorAmber * 0.30;
 
         // Veins paint warm light onto the surface, brightest where they
-        // line up with the rim — like seeing through to deeper channels.
-        col += uColorSpark * veins * (0.65 + fresnel * 0.8);
+        // line up with the rim.
+        col += uColorSpark * veins * (0.55 + fresnel * 0.7);
 
         // Ripples add a soft warm shimmer over the body.
-        col += uColorSpark * ripple * 1.05;
+        col += uColorSpark * ripple * 0.85;
 
-        // Crackle flashes white-hot regardless of fresnel — the fastest
-        // and most intermittent of the layers.
-        col += uColorSpark * crackle * 1.5;
+        // Crackle flashes — softened intensity to match the wider shape
+        // (1.5 -> 1.0) so they don't blow out.
+        col += uColorSpark * crackle * 1.0;
 
         // (7) Solar flares — bright violent peaks at the rare crests of
         // the flare noise field. The same vFlare value that drove the
@@ -221,18 +225,20 @@ export function createCore({ radius = 1.90 } = {}) {
         float pulse = 0.85 + 0.15 * sin(uTime * 1.2 + vNoise * 4.0);
         col *= pulse;
 
-        // Alpha is the sum of fresnel rim, vein contribution, and crackle
-        // flashes — the silhouette and bright filaments dominate, the dim
-        // body stays mostly transparent so the corona shows through.
-        // Body baseline alpha bumped (0.16 -> 0.22) for the increased
-        // overall glow; flares add their own significant alpha so the
-        // erupting region is clearly opaque.
+        // Alpha tuned for a fuzzy/diffuse look:
+        //   - Higher base (0.22 -> 0.34) so the body opacity is more
+        //     uniform across the surface, less peaky at detail spots.
+        //   - Fresnel contribution slightly reduced (0.85 -> 0.65) since
+        //     the wider fresnel exponent already spreads its influence
+        //     across more pixels — keeps total rim brightness similar.
+        //   - Crackle alpha lowered (0.55 -> 0.35) to match the softened
+        //     intensity. Veins and ripple also tweaked for balance.
         float alpha = clamp(
-          0.22
-          + fresnel * 0.85
-          + veins * 0.30
-          + ripple * 0.25
-          + crackle * 0.55
+          0.34
+          + fresnel * 0.65
+          + veins * 0.22
+          + ripple * 0.20
+          + crackle * 0.35
           + vFlare * 0.65,
           0.0,
           1.0
