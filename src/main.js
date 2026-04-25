@@ -24,7 +24,7 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   100,
 );
-camera.position.set(0, 0.1, 4.8);
+camera.position.set(0, 0.1, 6.0);
 
 // Subtle env map for the polished onyx highlights — kept dim so the stone
 // reads as solid mass, not a chrome ball.
@@ -56,11 +56,14 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.08));
 // envelope → particle corona whose inner band overlaps the plasma's bulge
 // envelope so the impenetrable-surface clamp visibly sweeps dust outward.
 const onyx = createOnyx({ radius: 0.55 });
-const core = createCore({ radius: 1.15 });
+// Plasma now nearly fills the particle containment area — its max bulge
+// (~2.20) sits just inside the particles' soft outer (2.40) so the corona
+// reads as a thin glowing skin laminated onto the plasma surface.
+const core = createCore({ radius: 1.90 });
 const particles = createParticles({
   count: 2700,
   innerRadius: 1.00,
-  outerRadius: 2.30,
+  outerRadius: 2.40,
 });
 
 // Real-time cubemap for the onyx reflections. Rendered each frame from the
@@ -84,7 +87,7 @@ particles.points.renderOrder = 2;
 
 // Lock the particle shader's view of the plasma surface to the actual
 // envelope: same base radius, displacement, noise scale, and time speed.
-particles.uniforms.uEnvBase.value = 1.15;
+particles.uniforms.uEnvBase.value = 1.90;
 particles.uniforms.uEnvDisp.value = core.uniforms.uDisplacement.value;
 particles.uniforms.uNoiseScale.value = core.uniforms.uNoiseScale.value;
 particles.uniforms.uNoiseSpeed.value = core.uniforms.uNoiseSpeed.value;
