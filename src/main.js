@@ -63,6 +63,22 @@ const particles = createParticles({
   outerRadius: 2.30,
 });
 
+// Real-time cubemap for the onyx reflections. Rendered each frame from the
+// sphere's center (with the sphere itself hidden during capture), so the
+// cubemap contains the actual surrounding particles + plasma. The sphere's
+// shader looks up this cubemap with the world-space reflection vector, so
+// reflections track the world — they don't rotate with the sphere.
+const reflectionTarget = new THREE.WebGLCubeRenderTarget(256, {
+  generateMipmaps: false,
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+});
+const reflectionCamera = new THREE.CubeCamera(0.1, 50, reflectionTarget);
+// Added to scene (not the group) so the group's idle sway rotation does
+// not move the cubemap origin — reflections stay world-aligned.
+scene.add(reflectionCamera);
+onyx.uniforms.uEnvMap.value = reflectionTarget.texture;
+
 core.mesh.renderOrder = 1;
 particles.points.renderOrder = 2;
 
@@ -99,6 +115,7 @@ function tick() {
 
   core.update(elapsed, dt);
   particles.update(elapsed);
+  onyx.uniforms.uTime.value = elapsed;
 
   // Pulse the plasma's displacement on click — both the plasma shader and
   // the particle shader read uEnvDisp / uDisplacement as the same value,
@@ -111,6 +128,14 @@ function tick() {
   group.position.y = Math.sin(elapsed * 0.6) * 0.02;
 
   controls.update();
+
+  // Capture the reflection cubemap: hide the onyx so the cube camera only
+  // sees the surrounding particles + plasma, render the 6 faces, then
+  // restore visibility before the main render.
+  onyx.mesh.visible = false;
+  reflectionCamera.update(renderer, scene);
+  onyx.mesh.visible = true;
+
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
 }
