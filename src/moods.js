@@ -185,11 +185,9 @@ export class MoodManager {
     this.plasmaScale += (this.target.scale.plasma - this.plasmaScale) * alpha;
     this.systems.onyx.mesh.scale.setScalar(this.onyxScale);
     this.systems.core.mesh.scale.setScalar(this.plasmaScale);
-    // Halo shell tracks the plasma's scale so the soft outer glow stays
-    // aligned with the visible plasma silhouette across all moods.
-    if (this.systems.core.halo) {
-      this.systems.core.halo.scale.setScalar(this.plasmaScale);
-    }
+    // Glow billboard's size is driven by uSize uniform (set by main.js
+    // each frame) rather than mesh.scale, since the billboard's vertex
+    // shader handles its own sizing — no scale needed here.
   }
 
   _lerpSection(uniforms, target, alpha) {

@@ -262,63 +262,78 @@ export function createCore({ radius = 1.90 } = {}) {
   const mesh = new THREE.Mesh(geometry, material);
   mesh.renderOrder = 1;
 
-  // Halo: a slightly larger sphere with a fresnel-only additive glow.
-  // Renders just outside the plasma silhouette so its rim creates a
-  // wide diffuse aura that bleeds into the dark, visually consistent
-  // with the gaussian halos on the particles. Detail kept low (32) and
-  // the shader is trivial — minimal GPU cost.
+  // Glow billboard: a camera-facing quad with a soft radial gradient,
+  // brightest at the center and fading to nothing at the edges. The
+  // billboard is depth-shifted in view space so the opaque onyx in the
+  // foreground occludes the portion of the gradient inside its silhouette,
+  // leaving the visible glow as a soft outer aura around the plasma —
+  // light bleeding from the center of the orb outward.
   //
-  // Color uniform shares the same THREE.Color object as the plasma's
-  // uColorHot, so when MoodManager lerps the plasma palette the halo
-  // automatically tracks.
-  const haloGeometry = new THREE.SphereGeometry(radius * 1.20, 32, 32);
-  const haloUniforms = {
+  // Color shares the THREE.Color reference with uColorHot so MoodManager's
+  // palette lerp auto-applies. uSize is updated externally each frame so
+  // the glow scales with the plasma during mood-driven mesh scaling.
+  const glowGeometry = new THREE.PlaneGeometry(1, 1);
+  const glowUniforms = {
     uTime: uniforms.uTime,
-    uColor: uniforms.uColorHot, // shared reference — auto-updates with mood
-    uIntensity: { value: 0.55 },
+    uColor: uniforms.uColorHot,
+    uIntensity: { value: 0.85 },
+    uSize: { value: radius * 3.4 },
+    // Negative offset pushes the billboard's view-space depth back behind
+    // the opaque onyx so depth-test occludes the inner portion.
+    uDepthOffset: { value: -2.0 },
   };
-  const haloMaterial = new THREE.ShaderMaterial({
-    uniforms: haloUniforms,
+  const glowMaterial = new THREE.ShaderMaterial({
+    uniforms: glowUniforms,
     transparent: true,
     depthWrite: false,
     depthTest: true,
-    side: THREE.FrontSide,
     blending: THREE.AdditiveBlending,
     vertexShader: /* glsl */ `
-      varying vec3 vNormal;
-      varying vec3 vViewPos;
+      uniform float uSize;
+      uniform float uDepthOffset;
+      varying vec2 vUv;
       void main() {
-        vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
-        vViewPos = -mvPos.xyz;
-        vNormal = normalize(normalMatrix * normal);
-        gl_Position = projectionMatrix * mvPos;
+        vUv = uv;
+        // Standard billboard trick: take the model origin in view space,
+        // then offset xy by the local quad position scaled by uSize. This
+        // keeps the quad camera-facing regardless of mesh rotation.
+        vec4 mvCenter = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+        mvCenter.xy += position.xy * uSize;
+        mvCenter.z += uDepthOffset;
+        gl_Position = projectionMatrix * mvCenter;
       }
     `,
     fragmentShader: /* glsl */ `
-      uniform float uTime;
       uniform vec3 uColor;
       uniform float uIntensity;
-      varying vec3 vNormal;
-      varying vec3 vViewPos;
+      uniform float uTime;
+      varying vec2 vUv;
       void main() {
-        vec3 V = normalize(vViewPos);
-        float ndv = max(dot(vNormal, V), 0.0);
-        // Wide soft fresnel — bright at the silhouette, fading inward.
-        // pow(_, 2.0) gives a gentle bleed about 25% of the way across
-        // the disc which reads as a generous outer halo.
-        float halo = pow(1.0 - ndv, 2.0);
-        // Subtle breathing modulation so the halo feels alive.
+        // Distance from quad center, normalized to [0..1] at the inscribed
+        // circle's edge.
+        vec2 c = vec2(0.5, 0.5);
+        float d = length(vUv - c) * 2.0;
+        if (d > 1.0) discard;
+        // Smooth radial gradient: 1 at center, 0 at edge. Soft falloff
+        // (pow 1.6) so the bleed extends well past the orb silhouette
+        // before fading into black.
+        float glow = pow(max(1.0 - d, 0.0), 1.6);
+        // Subtle breathing modulation matching the plasma's own pulse.
         float pulse = 0.88 + 0.12 * sin(uTime * 0.7);
-        gl_FragColor = vec4(uColor * halo * pulse, halo * uIntensity);
+        gl_FragColor = vec4(uColor * glow * pulse, glow * uIntensity);
       }
     `,
   });
-  const halo = new THREE.Mesh(haloGeometry, haloMaterial);
-  halo.renderOrder = 1;
+  const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+  // Render before the plasma so the plasma additively layers on top.
+  glow.renderOrder = 1;
+  // The vertex shader handles its own positioning via modelViewMatrix —
+  // the mesh's own scale/rotation is irrelevant.
+  glow.frustumCulled = false;
 
   return {
     mesh,
-    halo,
+    glow,
     uniforms,
     update(elapsed, dt) {
       uniforms.uTime.value = elapsed;
