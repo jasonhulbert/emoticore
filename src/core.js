@@ -21,14 +21,14 @@ import { simplex3d } from './shaders/noise.glsl.js';
 //      brief brilliant filaments that flash across the surface.
 //   5. Slow pulse: global brightness modulation tied to the displacement so
 //      brighter regions also breathe.
-export function createCore({ radius = 0.93 } = {}) {
+export function createCore({ radius = 1.15 } = {}) {
   const geometry = new THREE.IcosahedronGeometry(radius, 24);
 
   const uniforms = {
     uTime: { value: 0 },
     uNoiseScale: { value: 1.6 },
     uNoiseSpeed: { value: 0.4 },
-    uDisplacement: { value: 0.27 },
+    uDisplacement: { value: 0.36 },
     uPulse: { value: 0.0 },
     // Warm palette matched to the corona — deep ember through amber up to
     // a hot spark white, so the plasma reads as a continuation of the
