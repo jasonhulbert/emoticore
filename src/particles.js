@@ -1,16 +1,23 @@
 import * as THREE from 'three';
 import { simplex3d } from './shaders/noise.glsl.js';
 
-// The energy cloud that swirls around the onyx void. Particles are placed in
-// a thick shell whose inner edge sits just outside the stone; their motion is
-// driven by curl noise of an unseen field at the center, so the cloud reads
-// as energy responding to "something" hidden inside the stone. Heavily
-// additive — the falloffs are tuned to bloom into a luminous corona at small
-// scales and reveal swirling chaos when zoomed in.
+// Energy corona surrounding the plasma envelope. The vertex shader treats
+// the plasma surface as a moving fluid boundary and derives each particle's
+// position from a velocity field that decays with distance from the surface:
+//
+//   v(p) = v_surface(dir(p))      where p is near the surface
+//        ≈ v_ambient(p)           where p is far from the surface
+//
+// Components of the surface velocity:
+//   - Tangential: curl-noise flow along the surface (turbulent eddies)
+//   - Normal:     ∂surface/∂t (radial expansion when the plasma bulges out)
+//
+// Particles are also strictly impenetrable: any position inside the plasma
+// surface gets clamped to surface + ε, like dust around a fluid boundary.
 export function createParticles({
-  count = 5500,
-  innerRadius = 0.58,
-  outerRadius = 1.25,
+  count = 2750,
+  innerRadius = 1.25,
+  outerRadius = 1.95,
 } = {}) {
   const geometry = new THREE.BufferGeometry();
 
@@ -19,8 +26,8 @@ export function createParticles({
   const sizes = new Float32Array(count);
 
   for (let i = 0; i < count; i++) {
-    // Bias the radial distribution toward the inner shell so the corona
-    // is dense near the stone and feathers out into the dark.
+    // Bias inward so the corona is densest just outside the plasma surface,
+    // where the coupling is strongest, and feathers out into the dark.
     const u = Math.pow(Math.random(), 1.6);
     const r = innerRadius + u * (outerRadius - innerRadius);
     const theta = Math.acos(2 * Math.random() - 1);
@@ -29,7 +36,6 @@ export function createParticles({
     seeds[i * 3 + 1] = r * Math.sin(theta) * Math.sin(phi);
     seeds[i * 3 + 2] = r * Math.cos(theta);
     phases[i] = Math.random() * Math.PI * 2.0;
-    // 12% sparks (bright, motion-blurred streaks) on a bed of warm dust.
     sizes[i] = Math.random() < 0.12
       ? 2.2 + Math.random() * 1.8
       : 0.6 + Math.random() * 1.0;
@@ -43,11 +49,21 @@ export function createParticles({
 
   const uniforms = {
     uTime: { value: 0 },
+    // Plasma envelope parameters (kept identical to core.js so the surface
+    // particles see is the surface they're rendered next to).
+    uEnvBase: { value: 0.93 },
+    uEnvDisp: { value: 0.27 },
     uNoiseScale: { value: 1.6 },
-    uNoiseSpeed: { value: 0.35 },
-    uFlowStrength: { value: 0.32 },
-    uDisplacement: { value: 0.22 },
-    uInner: { value: innerRadius },
+    uNoiseSpeed: { value: 0.4 },
+    // Coupling strengths. Sweep is tangential drag (eddies dragging dust
+    // along the surface). Push is radial impulse when the surface expands
+    // outward at this point. Falloff controls how fast influence decays
+    // with distance from the surface.
+    uEnvSweep: { value: 0.55 },
+    uEnvPush: { value: 0.7 },
+    uEnvFalloff: { value: 4.0 },
+    // Background curl-noise drift far from the surface.
+    uAmbientFlow: { value: 0.18 },
     uOuter: { value: outerRadius },
     uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
     uColorCool: { value: new THREE.Color('#7fd8ff') },
@@ -64,11 +80,14 @@ export function createParticles({
     vertexShader: /* glsl */ `
       ${simplex3d}
       uniform float uTime;
+      uniform float uEnvBase;
+      uniform float uEnvDisp;
       uniform float uNoiseScale;
       uniform float uNoiseSpeed;
-      uniform float uFlowStrength;
-      uniform float uDisplacement;
-      uniform float uInner;
+      uniform float uEnvSweep;
+      uniform float uEnvPush;
+      uniform float uEnvFalloff;
+      uniform float uAmbientFlow;
       uniform float uOuter;
       uniform float uPixelRatio;
 
@@ -79,6 +98,7 @@ export function createParticles({
       varying float vSpeed;
       varying float vRadial;
       varying float vSpark;
+      varying float vInfluence;
 
       float fbm(vec3 p) {
         float n = 0.0;
@@ -91,48 +111,80 @@ export function createParticles({
         return n;
       }
 
+      // Plasma surface radius in a given unit direction at time t.
+      float surfaceAt(vec3 dir, float t) {
+        return uEnvBase + fbm(dir * uNoiseScale + vec3(0.0, t, 0.0)) * uEnvDisp;
+      }
+
       void main() {
         float t = uTime * uNoiseSpeed;
 
-        // Slow orbital drift unique to each particle keeps the cloud from
-        // collapsing into static streamlines.
-        float orbit = uTime * 0.12 + aPhase;
+        // Slow orbital drift unique to each particle keeps streamlines from
+        // collapsing into static patterns.
+        float orbit = uTime * 0.10 + aPhase;
         mat3 rot = mat3(
           cos(orbit), 0.0, sin(orbit),
           0.0,        1.0, 0.0,
           -sin(orbit), 0.0, cos(orbit)
         );
         vec3 seed = rot * aSeed;
-
-        // Curl noise of the hidden energy field — particles stream around
-        // invisible bulges as if reacting to something inside the stone.
-        vec3 flow = snoiseCurl(seed * uNoiseScale + vec3(0.0, t, 0.0));
-        vec3 pos = seed + flow * uFlowStrength;
-
         vec3 dir = normalize(seed);
-        float field = fbm(dir * uNoiseScale + vec3(0.0, t, 0.0));
-        float bulge = field * uDisplacement;
-        pos += dir * bulge * 0.9;
 
-        // Never let particles intrude into the stone.
-        float len = length(pos);
-        float innerBound = uInner + max(bulge, 0.0);
-        if (len < innerBound) {
-          pos = normalize(pos) * innerBound;
-        } else if (len > uOuter) {
-          pos = normalize(pos) * uOuter;
+        // Ambient turbulence (curl noise = divergence-free turbulent flow,
+        // a standard approximation for incompressible fluid motion).
+        vec3 ambient = snoiseCurl(seed * uNoiseScale * 0.7 + vec3(0.0, t, 0.0));
+        vec3 pos = seed + ambient * uAmbientFlow;
+
+        // Plasma surface samples: at the particle's direction, now and a
+        // small step into the future. The future sample lets us recover
+        // ∂surface/∂t (radial surface velocity) without per-frame state.
+        float surf  = surfaceAt(dir, t);
+        float surfF = surfaceAt(dir, t + 0.08);
+        float surfVel = (surfF - surf) / 0.08;
+
+        // Influence factor: 1 right at the surface, decaying exponentially
+        // with distance. This is the physical "viscous boundary layer"
+        // approximation — the surface drags the surrounding medium with a
+        // strength that falls off with distance.
+        float distOut = max(length(pos) - surf, 0.0);
+        float influence = exp(-distOut * uEnvFalloff);
+        vInfluence = influence;
+
+        // Tangential surface flow — sample curl noise at a slightly higher
+        // frequency on the unit sphere so it reads as turbulence riding on
+        // the surface rather than ambient drift.
+        vec3 surfTangent = snoiseCurl(dir * uNoiseScale * 1.6 + vec3(13.7, t * 1.1, 5.2));
+        // Project onto the local tangent plane so it doesn't push radially.
+        surfTangent -= dir * dot(surfTangent, dir);
+        pos += surfTangent * uEnvSweep * influence;
+
+        // Radial push: when the surface is expanding outward at this point
+        // (positive surfVel), particles get accelerated outward. Negative
+        // surfVel (surface receding) doesn't pull particles back — gas
+        // doesn't get sucked into a deflating boundary in this model.
+        pos += dir * max(surfVel, 0.0) * uEnvPush * influence;
+
+        // Impenetrable plasma surface: any position inside surf + ε gets
+        // pushed back out to the surface. ε keeps the densest dust band
+        // visibly separated from the plasma rim.
+        float minRadius = surf + 0.04;
+        float L = length(pos);
+        if (L < minRadius) {
+          pos = (pos / L) * minRadius;
+        } else if (L > uOuter) {
+          pos = (pos / L) * uOuter;
         }
 
-        vSpeed = length(flow);
-        vRadial = (length(pos) - uInner) / (uOuter - uInner);
+        // Final velocity proxy for shading — particles strongly coupled to
+        // the surface, or moving fast in ambient curl, glow warmer.
+        vSpeed = length(ambient) + length(surfTangent) * influence;
+        vRadial = (length(pos) - minRadius) / (uOuter - minRadius);
         vSpark = step(1.8, aSize);
 
         vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
         gl_Position = projectionMatrix * mvPosition;
 
-        float size = aSize * (1.0 + vSpeed * 0.6);
-        // Cap kept generous so the bloom can build up but no single point
-        // dominates the screen on high-DPI displays.
+        float size = aSize * (1.0 + vSpeed * 0.5);
         gl_PointSize = clamp(size * uPixelRatio * (160.0 / -mvPosition.z), 1.0, 90.0);
       }
     `,
@@ -144,25 +196,25 @@ export function createParticles({
       varying float vSpeed;
       varying float vRadial;
       varying float vSpark;
+      varying float vInfluence;
 
       void main() {
         vec2 uv = gl_PointCoord - 0.5;
         float d = length(uv);
         if (d > 0.5) discard;
 
-        // Soft dust + a punchy halo for sparks. Halo's wide shoulders are
-        // what creates the bloom corona when zoomed out.
         float dust = exp(-d * d * 12.0);
         float halo = smoothstep(0.5, 0.05, d);
         float shape = mix(dust * 0.7 + halo * 0.25, dust * 0.4 + pow(halo, 2.5), vSpark);
 
-        // Cool deep in the cloud, warm on the fast-moving streaks. Sparks
-        // bias toward a warm-white core so the corona feels alive, not icy.
-        vec3 col = mix(uColorCool, uColorWarm, clamp(vSpeed * 1.2, 0.0, 1.0));
+        // Particles riding the plasma surface lean warm / spark-colored —
+        // they're hotter and faster than ambient dust drifting in the dark.
+        float warmth = clamp(vSpeed * 1.0 + vInfluence * 0.6, 0.0, 1.0);
+        vec3 col = mix(uColorCool, uColorWarm, warmth);
         col = mix(col, uSpark, vSpark * 0.7);
 
-        // Soft fade at the very outer edge so the corona feathers into black
-        // instead of cutting off.
+        // Soft outer fade so the corona feathers into black instead of
+        // cutting off at the boundary sphere.
         float edgeFade = 1.0 - smoothstep(0.7, 1.0, vRadial);
         float alpha = shape * (0.35 + 0.55 * edgeFade);
 
@@ -173,9 +225,7 @@ export function createParticles({
 
   const points = new THREE.Points(geometry, material);
   points.frustumCulled = false;
-  // Render after the opaque onyx so depthTest hides particles behind the
-  // stone while ones in front bloom additively over the dark silhouette.
-  points.renderOrder = 1;
+  points.renderOrder = 2;
 
   return {
     points,

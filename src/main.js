@@ -24,7 +24,7 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   100,
 );
-camera.position.set(0, 0.1, 3.4);
+camera.position.set(0, 0.1, 4.2);
 
 // Subtle env map for the polished onyx highlights — kept dim so the stone
 // reads as solid mass, not a chrome ball.
@@ -51,22 +51,28 @@ scene.add(key);
 scene.add(new THREE.AmbientLight(0xffffff, 0.08));
 
 // Layer order from inside out: opaque onyx stone → noise-displaced plasma
-// envelope hugging the stone → swirling particle corona. The plasma's
-// uniforms drive the particle cloud so their motion stays coherent, and
-// clicks "poke" the plasma to send ripples outward through both layers.
+// envelope (50% bigger than the stone) → particle corona swirling outside
+// the plasma's max bulge. The particle shader treats the plasma surface as
+// a moving fluid boundary and derives motion from its velocity field, so
+// growing or pulsing the plasma automatically deforms the cloud.
 const onyx = createOnyx({ radius: 0.55 });
-const core = createCore({ radius: 0.62 });
+const core = createCore({ radius: 0.93 });
 const particles = createParticles({
-  count: 5500,
-  innerRadius: 0.78,
-  outerRadius: 1.3,
+  count: 2750,
+  innerRadius: 1.25,
+  outerRadius: 1.95,
 });
 
-// Explicit render order: onyx is opaque so it always renders first and
-// writes depth; plasma and particles are additive transparent — plasma
-// before particles so the corona's brightest sparks layer on top.
 core.mesh.renderOrder = 1;
 particles.points.renderOrder = 2;
+
+// Lock the particle shader's view of the plasma surface to the actual
+// envelope: same base radius, displacement, noise scale, and time speed.
+// Doing this once at init is enough — these don't change after creation.
+particles.uniforms.uEnvBase.value = 0.93;
+particles.uniforms.uEnvDisp.value = core.uniforms.uDisplacement.value;
+particles.uniforms.uNoiseScale.value = core.uniforms.uNoiseScale.value;
+particles.uniforms.uNoiseSpeed.value = core.uniforms.uNoiseSpeed.value;
 
 const group = new THREE.Group();
 group.add(onyx.mesh);
@@ -92,12 +98,14 @@ function tick() {
   const dt = clock.getDelta();
   const elapsed = clock.elapsedTime;
 
-  // Core is invisible but still ticks — its uPulse decay propagates into
-  // the particle field through the shared displacement uniform below.
   core.update(elapsed, dt);
   particles.update(elapsed);
 
-  particles.uniforms.uDisplacement.value =
+  // Pulse the plasma's displacement on click — both the plasma shader and
+  // the particle shader read uEnvDisp / uDisplacement as the same value,
+  // so a click physically swells the plasma surface and the impenetrable-
+  // boundary clamp pushes the corona outward in response.
+  particles.uniforms.uEnvDisp.value =
     core.uniforms.uDisplacement.value + core.uniforms.uPulse.value * 0.15;
 
   group.rotation.y = Math.sin(elapsed * 0.15) * 0.15;
