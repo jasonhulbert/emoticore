@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { createCore } from './core.js';
-import { createOrb } from './orb.js';
+import { createOnyx } from './orb.js';
 import { createParticles } from './particles.js';
 
 const container = document.getElementById('app');
@@ -12,7 +12,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(0x000000, 0);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
+renderer.toneMappingExposure = 1.05;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 container.appendChild(renderer.domElement);
 
@@ -26,7 +26,8 @@ const camera = new THREE.PerspectiveCamera(
 );
 camera.position.set(0, 0.1, 3.4);
 
-// Environment map drives the frosted glass reflections.
+// Subtle env map for the polished onyx highlights — kept dim so the stone
+// reads as solid mass, not a chrome ball.
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
@@ -34,37 +35,37 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.enablePan = false;
-controls.minDistance = 2.0;
-controls.maxDistance = 8.0;
+controls.minDistance = 1.6;
+controls.maxDistance = 9.0;
 
-// A soft backlight so the silhouette of the orb reads clearly on dark backgrounds.
-const rim = new THREE.DirectionalLight(0x88bbff, 0.8);
+// Cool rim from one side, warm key from the other — gives the onyx two
+// distinct highlight tones so it never looks flat.
+const rim = new THREE.DirectionalLight(0x88bbff, 0.7);
 rim.position.set(-2, 1.5, -2);
 scene.add(rim);
 
-const key = new THREE.DirectionalLight(0xffe6c6, 0.5);
+const key = new THREE.DirectionalLight(0xffe6c6, 0.45);
 key.position.set(2.5, 1.2, 2.0);
 scene.add(key);
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.1));
+scene.add(new THREE.AmbientLight(0xffffff, 0.08));
 
+// Core stays in the simulation but is never added to the scene — its
+// uniforms drive the hidden energy field that the particle cloud reacts to,
+// and clicks "poke" it to send ripples outward through the cloud.
 const core = createCore();
+const onyx = createOnyx({ radius: 0.55 });
 const particles = createParticles({
-  count: 2800,
-  innerRadius: 0.62,
-  outerRadius: 0.93,
+  count: 5500,
+  innerRadius: 0.58,
+  outerRadius: 1.25,
 });
-const orb = createOrb();
 
-// Group so we can gently sway the whole assistant as one.
 const group = new THREE.Group();
-group.add(core.mesh);
+group.add(onyx.mesh);
 group.add(particles.points);
-group.add(orb.mesh);
 scene.add(group);
 
-// Click/tap pokes the core, which ripples out through the particles because
-// they share the displacement uniform.
 window.addEventListener('pointerdown', () => {
   core.poke(0.6);
 });
@@ -83,15 +84,14 @@ function tick() {
   const dt = clock.getDelta();
   const elapsed = clock.elapsedTime;
 
+  // Core is invisible but still ticks — its uPulse decay propagates into
+  // the particle field through the shared displacement uniform below.
   core.update(elapsed, dt);
   particles.update(elapsed);
 
-  // Keep core + particle fields locked together so poking the core ripples
-  // visibly out into the cloud.
   particles.uniforms.uDisplacement.value =
     core.uniforms.uDisplacement.value + core.uniforms.uPulse.value * 0.15;
 
-  // Idle sway gives the orb subtle "alive" motion even without interaction.
   group.rotation.y = Math.sin(elapsed * 0.15) * 0.15;
   group.position.y = Math.sin(elapsed * 0.6) * 0.02;
 
