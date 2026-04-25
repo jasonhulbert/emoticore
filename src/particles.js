@@ -231,7 +231,7 @@ export function createParticles({
         gl_Position = projectionMatrix * mvPosition;
 
         float size = aSize * (1.0 + vSpeed * 0.4);
-        gl_PointSize = clamp(size * uPixelRatio * (65.0 / -mvPosition.z), 1.0, 22.0);
+        gl_PointSize = clamp(size * uPixelRatio * (40.0 / -mvPosition.z), 1.0, 14.0);
       }
     `,
     fragmentShader: /* glsl */ `
