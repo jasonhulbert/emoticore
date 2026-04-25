@@ -6,6 +6,21 @@ import { simplex3d } from './shaders/noise.glsl.js';
 // intersects the onyx the depth test culls it cleanly and where it extends
 // past the silhouette it reads as glowing plasma. Same noise field as the
 // particle cloud so plasma surface bulges and particle motion stay locked.
+//
+// The fragment shader composites four physically-motivated layers to create
+// rich plasma lighting:
+//   1. Temperature ramp (displacement -> hue/brightness): peaks are hotter,
+//      troughs are deep ember. Like blackbody radiation across a surface
+//      with varying temperature.
+//   2. Fresnel rim: edges-on to the camera glow brightest, simulating the
+//      thicker line-of-sight optical depth through a translucent shell.
+//   3. Internal veins: low-frequency 3D noise on the surface direction,
+//      animated independently from the displacement, reads as flickering
+//      plasma channels under the skin.
+//   4. Electric crackles: high-frequency noise with a sharp threshold —
+//      brief brilliant filaments that flash across the surface.
+//   5. Slow pulse: global brightness modulation tied to the displacement so
+//      brighter regions also breathe.
 export function createCore({ radius = 0.93 } = {}) {
   const geometry = new THREE.IcosahedronGeometry(radius, 24);
 
@@ -15,9 +30,13 @@ export function createCore({ radius = 0.93 } = {}) {
     uNoiseSpeed: { value: 0.4 },
     uDisplacement: { value: 0.27 },
     uPulse: { value: 0.0 },
-    uColorA: { value: new THREE.Color('#6ce0ff') }, // cool cyan
-    uColorB: { value: new THREE.Color('#b16cff') }, // violet
-    uColorC: { value: new THREE.Color('#ffd36c') }, // warm core highlight
+    // Warm palette matched to the corona — deep ember through amber up to
+    // a hot spark white, so the plasma reads as a continuation of the
+    // particle cloud's color story rather than a competing element.
+    uColorEmber: { value: new THREE.Color('#1a0500') }, // deep red-black base
+    uColorAmber: { value: new THREE.Color('#ff5e10') }, // orange body
+    uColorHot:   { value: new THREE.Color('#ffb050') }, // bright amber peaks
+    uColorSpark: { value: new THREE.Color('#fff4cc') }, // warm white filaments
   };
 
   const material = new THREE.ShaderMaterial({
@@ -35,9 +54,10 @@ export function createCore({ radius = 0.93 } = {}) {
 
       varying vec3 vNormal;
       varying vec3 vViewPosition;
+      varying vec3 vSurfaceDir;
       varying float vDisplacement;
+      varying float vNoise;
 
-      // Layered FBM: big slow rolls + smaller faster ripples.
       float fbm(vec3 p) {
         float n = 0.0;
         float a = 0.5;
@@ -51,6 +71,7 @@ export function createCore({ radius = 0.93 } = {}) {
 
       void main() {
         vec3 p = position;
+        vec3 dir = normalize(p);
         float t = uTime * uNoiseSpeed;
         float n = fbm(p * uNoiseScale + vec3(0.0, t, 0.0));
         float pulse = (0.5 + 0.5 * sin(uTime * 0.8)) * 0.15 + uPulse;
@@ -59,6 +80,10 @@ export function createCore({ radius = 0.93 } = {}) {
         vec3 displaced = p + normal * disp;
 
         vDisplacement = disp;
+        vNoise = n;
+        // Pass the undisplaced unit direction so the fragment shader can
+        // sample stable noise patterns over the rotating surface.
+        vSurfaceDir = dir;
         vec4 mvPosition = modelViewMatrix * vec4(displaced, 1.0);
         vViewPosition = -mvPosition.xyz;
         vNormal = normalize(normalMatrix * normal);
@@ -66,33 +91,84 @@ export function createCore({ radius = 0.93 } = {}) {
       }
     `,
     fragmentShader: /* glsl */ `
-      uniform vec3 uColorA;
-      uniform vec3 uColorB;
-      uniform vec3 uColorC;
+      ${simplex3d}
+      uniform float uTime;
+      uniform vec3 uColorEmber;
+      uniform vec3 uColorAmber;
+      uniform vec3 uColorHot;
+      uniform vec3 uColorSpark;
 
       varying vec3 vNormal;
       varying vec3 vViewPosition;
+      varying vec3 vSurfaceDir;
       varying float vDisplacement;
+      varying float vNoise;
+
+      float fbm4(vec3 p) {
+        float n = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 4; i++) {
+          n += a * snoise(p);
+          p *= 2.05;
+          a *= 0.5;
+        }
+        return n;
+      }
 
       void main() {
         vec3 viewDir = normalize(vViewPosition);
-        float fresnel = pow(1.0 - max(dot(vNormal, viewDir), 0.0), 2.2);
+        float ndv = max(dot(vNormal, viewDir), 0.0);
+        float fresnel = pow(1.0 - ndv, 2.0);
 
-        // Displacement drives the core-to-edge color shift.
-        float m = smoothstep(-0.1, 0.2, vDisplacement);
-        vec3 col = mix(uColorA, uColorB, m);
-        col = mix(col, uColorC, fresnel * 0.65);
+        // (1) Temperature: rises with the noise displacement so peaks are
+        // hotter than troughs.
+        float temp = smoothstep(-0.18, 0.20, vDisplacement);
 
-        // Bias toward a hot center so the plasma reads as energy, not matte
-        // clay. Brightness peaks at the silhouette edge from the fresnel.
-        float center = 1.0 - fresnel;
-        col += uColorC * center * 0.4;
+        // (3) Internal veins — low-frequency noise on the surface direction
+        // animated independently from the main displacement, gives the
+        // sense of subsurface energy channels flickering under the skin.
+        float t2 = uTime * 0.55;
+        float vein = fbm4(vSurfaceDir * 5.5 + vec3(0.0, t2, 0.0));
+        float veins = pow(max(vein * 1.4, 0.0), 3.0);
 
-        // Lower base alpha than the original orb-encased version so the
-        // particle corona reads through the plasma instead of being masked
-        // by it. The fresnel-weighted boost makes the rim of the bulges
-        // (the plasma surface seen edge-on) glow brightest.
-        float alpha = clamp(0.18 + fresnel * 0.7, 0.0, 1.0);
+        // (4) High-frequency electric crackle — sharp threshold creates
+        // brief filaments that flash across the surface.
+        float crackleN = fbm4(vSurfaceDir * 18.0 + vec3(t2 * 3.5, 0.0, 7.3));
+        float crackle = pow(max(crackleN * 1.6, 0.0), 6.0);
+
+        // Color buildup: ember base at troughs -> amber at the body ->
+        // hot rim at fresnel grazing -> spark filaments on top of that.
+        vec3 col = mix(uColorEmber, uColorAmber, temp);
+        col = mix(col, uColorHot, fresnel * 0.85);
+
+        // Hot bias on the bulge centers (high temp + low fresnel) so the
+        // peaks glow from within rather than only at their silhouette.
+        col += uColorHot * temp * (1.0 - fresnel) * 0.45;
+
+        // Veins paint warm light onto the surface, brightest where they
+        // line up with the rim — like seeing through to deeper channels.
+        col += uColorSpark * veins * (0.55 + fresnel * 0.7);
+
+        // Crackles flash white-hot regardless of fresnel.
+        col += uColorSpark * crackle * 1.6;
+
+        // (5) Slow whole-body pulse keyed to the noise so brighter regions
+        // also breathe more — never feels static.
+        float pulse = 0.85 + 0.15 * sin(uTime * 1.2 + vNoise * 4.0);
+        col *= pulse;
+
+        // Alpha is the sum of fresnel rim, vein contribution, and crackle
+        // flashes — the silhouette and bright filaments dominate, the dim
+        // body stays mostly transparent so the corona shows through.
+        float alpha = clamp(
+          0.16
+          + fresnel * 0.75
+          + veins * 0.30
+          + crackle * 0.55,
+          0.0,
+          1.0
+        );
+
         gl_FragColor = vec4(col, alpha);
       }
     `,
