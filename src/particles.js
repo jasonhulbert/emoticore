@@ -28,6 +28,9 @@ export function createParticles({
   const phases = new Float32Array(count);
   const sizes = new Float32Array(count);
   const rates = new Float32Array(count);
+  const births = new Float32Array(count);
+  const lifeRates = new Float32Array(count);
+  const brightnesses = new Float32Array(count);
 
   for (let i = 0; i < count; i++) {
     // Bias inward so the corona is densest just outside the plasma surface,
@@ -40,19 +43,33 @@ export function createParticles({
     seeds[i * 3 + 1] = r * Math.sin(theta) * Math.sin(phi);
     seeds[i * 3 + 2] = r * Math.cos(theta);
     phases[i] = Math.random() * Math.PI * 2.0;
-    sizes[i] = Math.random() < 0.12
-      ? 2.2 + Math.random() * 1.8
-      : 0.6 + Math.random() * 1.0;
-    // Per-particle orbit rate (and sign) so the cloud doesn't rotate as a
-    // rigid sphere — different particles travel at different angular speeds
-    // and some go counter-clockwise, breaking up the uniform pattern.
+    // Smaller particles overall — sparks 1.0-1.8 (was 2.2-4.0), dust
+    // 0.3-0.8 (was 0.6-1.6). Reads as fine glittering dust instead of
+    // fat cartoonish blobs.
+    sizes[i] = Math.random() < 0.10
+      ? 1.0 + Math.random() * 0.8
+      : 0.3 + Math.random() * 0.5;
     rates[i] = (Math.random() - 0.5) * 0.18;
+    // Lifecycle: each particle has a phase offset and a life rate. The
+    // shader fades brightness in and out across the cycle, so at any
+    // moment some particles are fading in, some are bright, some are
+    // fading out — the cloud reads as continuously regenerating instead
+    // of a static set of dots.
+    births[i] = Math.random();
+    // lifeRate is cycles per second. 0.04-0.14 -> period 7-25 seconds.
+    lifeRates[i] = 0.04 + Math.random() * 0.10;
+    // Subtle base-brightness variation per particle (very slight, so the
+    // cloud doesn't look like a bimodal light/dark pattern).
+    brightnesses[i] = 0.7 + Math.random() * 0.3;
   }
 
   geometry.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 3));
   geometry.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
   geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
   geometry.setAttribute('aRate', new THREE.BufferAttribute(rates, 1));
+  geometry.setAttribute('aBirth', new THREE.BufferAttribute(births, 1));
+  geometry.setAttribute('aLifeRate', new THREE.BufferAttribute(lifeRates, 1));
+  geometry.setAttribute('aBrightness', new THREE.BufferAttribute(brightnesses, 1));
   geometry.setAttribute('position', new THREE.BufferAttribute(seeds.slice(), 3));
   geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), outerRadius + 1.5);
 
@@ -113,12 +130,17 @@ export function createParticles({
       attribute float aPhase;
       attribute float aSize;
       attribute float aRate;
+      attribute float aBirth;
+      attribute float aLifeRate;
+      attribute float aBrightness;
 
       varying float vSpeed;
       varying float vRadial;
       varying float vSpark;
       varying float vInfluence;
       varying float vDistance;
+      varying float vLife;
+      varying float vBrightness;
 
       float fbm(vec3 p) {
         float n = 0.0;
@@ -146,6 +168,32 @@ export function createParticles({
       void main() {
         float t = uTime * uNoiseSpeed;
 
+        // Lifecycle. life01 runs 0->1 each cycle. cycleIdx is the discrete
+        // cycle number, used to perturb the seed position so each cycle the
+        // particle "respawns" at a slightly different point — what fades in
+        // is not exactly what faded out, so the cloud reads as continuously
+        // regenerating dust rather than the same pattern blinking in place.
+        float lifeT  = uTime * aLifeRate + aBirth;
+        float life01 = fract(lifeT);
+        float cycleIdx = floor(lifeT);
+
+        // Smooth bell-shaped fade: 0 at boundaries, 1 in the middle of life.
+        // Sharp on the way out, slower on the way in, like a real ember.
+        float fadeIn  = smoothstep(0.0, 0.25, life01);
+        float fadeOut = 1.0 - smoothstep(0.55, 1.0, life01);
+        vLife = fadeIn * fadeOut;
+        vBrightness = aBrightness;
+
+        // Per-cycle seed perturbation. Sample noise with cycleIdx as one
+        // axis so the offset is constant within a cycle but jumps to a new
+        // value each respawn. The jump happens while vLife is ~0 so it's
+        // invisible — the particle just fades in at a fresh position.
+        vec3 cycleOffset = vec3(
+          snoise(vec3(cycleIdx * 7.31, aPhase * 1.7, 0.0)),
+          snoise(vec3(0.0, cycleIdx * 11.7, aPhase * 0.9)),
+          snoise(vec3(aPhase * 2.3, 0.0, cycleIdx * 5.9))
+        ) * 0.18;
+
         // Per-particle orbital drift around an axis derived from the phase.
         // Different rates and axes per particle prevent the cloud from
         // rotating as a coherent sphere.
@@ -155,7 +203,7 @@ export function createParticles({
           sin(aPhase * 1.9)
         ));
         float angle = uTime * aRate + aPhase;
-        vec3 seed = rotateAxis(aSeed, axis, angle);
+        vec3 seed = rotateAxis(aSeed, axis, angle) + cycleOffset;
         vec3 dir = normalize(seed);
 
         // Ambient turbulence (curl noise = divergence-free turbulent flow,
@@ -216,17 +264,17 @@ export function createParticles({
         vSpeed = length(ambient) + length(surfTangent) * influence;
         vDistance = length(pos);
         vRadial = vDistance / uFadeRadius;
-        vSpark = step(1.8, aSize);
+        // Smooth sparkness across the dust/spark gap (dust ≤0.8, sparks ≥1.0)
+        // instead of a hard step, for a gentler size→shape mapping.
+        vSpark = smoothstep(0.85, 1.4, aSize);
 
         vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
         gl_Position = projectionMatrix * mvPosition;
 
-        float size = aSize * (1.0 + vSpeed * 0.5);
-        // Sharper max cap: at the previous 90px the gaussian-shaded core
-        // was spread across 50+ pixels and read as a soft cotton blob.
-        // At 55px the core occupies a tight 15-20 pixels with the halo +
-        // star-spike pattern around it, so the structure is visible.
-        gl_PointSize = clamp(size * uPixelRatio * (140.0 / -mvPosition.z), 1.0, 55.0);
+        float size = aSize * (1.0 + vSpeed * 0.4);
+        // Smaller particles overall — max 22px, so they read as fine
+        // glittering dust rather than fat cartoon blobs.
+        gl_PointSize = clamp(size * uPixelRatio * (80.0 / -mvPosition.z), 1.0, 22.0);
       }
     `,
     fragmentShader: /* glsl */ `
@@ -239,36 +287,22 @@ export function createParticles({
       varying float vSpark;
       varying float vInfluence;
       varying float vDistance;
+      varying float vLife;
+      varying float vBrightness;
 
-      // Particle shading is composed of three layers, the same approach
-      // used on the plasma surface — each particle reads as a lit point
-      // rather than a soft disc.
-      //
-      //   1. Hot core: tight gaussian (exp(-d² · 80)) — pixel-sharp at the
-      //      center, ~20% of disc radius. Reads as the actual hot point.
-      //   2. Halo: wider gaussian (exp(-d² · 6)) — soft outer glow that
-      //      gives the particle a sense of light spilling into space.
-      //   3. Star spikes: 4-pointed cross, only sparks. Classic lens-flare
-      //      shape; cos(2θ) raised to a high power picks out sharp peaks
-      //      along the diagonal cross axes, multiplied by a radial fade
-      //      so the spikes are anchored at the core.
-      //
-      // Dust particles get a softer base + small core; spark particles get
-      // the full bright core + halo + spikes treatment.
+      // Each particle is a tight gaussian with a soft halo. No star spikes —
+      // those read as cartoonish lens-flare stickers at this scale. Just a
+      // bright lit pinpoint with a faint surrounding glow.
       void main() {
         vec2 uv = gl_PointCoord - 0.5;
         float d = length(uv);
         if (d > 0.5) discard;
 
-        float core = exp(-d * d * 80.0);
-        float halo = exp(-d * d * 6.0);
+        float core = exp(-d * d * 70.0);
+        float halo = exp(-d * d * 7.0);
 
-        float angle = atan(uv.y, uv.x);
-        float crossPattern = pow(abs(cos(angle * 2.0)), 18.0);
-        float spikes = crossPattern * smoothstep(0.5, 0.04, d);
-
-        float dustShape  = exp(-d * d * 14.0) * 0.65 + halo * 0.10;
-        float sparkShape = core * 1.00 + halo * 0.22 + spikes * 0.55;
+        float dustShape  = exp(-d * d * 14.0) * 0.65 + halo * 0.08;
+        float sparkShape = core * 1.00 + halo * 0.20;
         float intensity  = mix(dustShape, sparkShape, vSpark);
 
         // Particles riding the plasma surface, or moving fast in ambient
@@ -277,17 +311,22 @@ export function createParticles({
         vec3 col = mix(uColorCool, uColorWarm, warmth);
         col = mix(col, uSpark, vSpark * 0.7);
 
-        // Subtle chromatic edge: the outer halo carries a touch of cool
-        // blue, mimicking the chromatic aberration of a real bright point
-        // through a lens. Adds a "lit" feel rather than flat additive blur.
+        // Subtle chromatic edge: a touch of cool blue on the outer halo
+        // mimics the chromatic aberration of a real lit point through a
+        // lens. Adds a "lit" feel rather than flat additive blur.
         float chroma = max(halo - core, 0.0);
-        col = mix(col, col * vec3(0.65, 0.85, 1.15), chroma * 0.35);
+        col = mix(col, col * vec3(0.7, 0.88, 1.10), chroma * 0.25);
 
-        // Soft alpha fade based on absolute distance from origin — particles
-        // that drift far from the cloud's natural envelope feather to black
-        // instead of being clamped onto a hard sphere.
+        // Outer envelope fade keeps particles feathering into the dark
+        // instead of pinning to a sphere boundary.
         float edgeFade = 1.0 - smoothstep(0.85, 1.25, vRadial);
-        float alpha = intensity * (0.40 + 0.50 * edgeFade);
+
+        // vLife (lifecycle bell curve) and vBrightness (per-particle base
+        // brightness, ~0.7-1.0) combine for the final attenuation. With
+        // 1800 particles all on independent cycles, at any moment some are
+        // bright, some are fading, some are dark — the cloud reads as
+        // continuously regenerating instead of a static pattern.
+        float alpha = intensity * (0.40 + 0.50 * edgeFade) * vLife * vBrightness;
 
         gl_FragColor = vec4(col, alpha);
       }
