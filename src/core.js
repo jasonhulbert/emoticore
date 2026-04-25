@@ -276,10 +276,13 @@ export function createCore({ radius = 1.90 } = {}) {
   const glowUniforms = {
     uTime: uniforms.uTime,
     uColor: uniforms.uColorHot,
-    uIntensity: { value: 0.85 },
-    uSize: { value: radius * 3.4 },
-    // Negative offset pushes the billboard's view-space depth back behind
-    // the opaque onyx so depth-test occludes the inner portion.
+    uIntensity: { value: 1.30 },
+    // Larger billboard (radius * 5 vs 3.4): with the smaller size, most
+    // of the gradient's bright region was inside the plasma silhouette
+    // where the plasma's own fresnel rim swallowed it. At 5x radius, the
+    // gradient's softer outer falloff is still meaningfully bright at the
+    // plasma silhouette and well past it.
+    uSize: { value: radius * 5.0 },
     uDepthOffset: { value: -2.0 },
   };
   const glowMaterial = new THREE.ShaderMaterial({
@@ -314,10 +317,11 @@ export function createCore({ radius = 1.90 } = {}) {
         vec2 c = vec2(0.5, 0.5);
         float d = length(vUv - c) * 2.0;
         if (d > 1.0) discard;
-        // Smooth radial gradient: 1 at center, 0 at edge. Soft falloff
-        // (pow 1.6) so the bleed extends well past the orb silhouette
-        // before fading into black.
-        float glow = pow(max(1.0 - d, 0.0), 1.6);
+        // Smooth radial gradient: 1 at center, 0 at edge. Linear falloff
+        // (pow 1.0) so the bleed extends as a wide soft aura that's still
+        // clearly bright at the plasma silhouette and well past it,
+        // instead of dropping to near-zero just outside the plasma.
+        float glow = pow(max(1.0 - d, 0.0), 1.0);
         // Subtle breathing modulation matching the plasma's own pulse.
         float pulse = 0.88 + 0.12 * sin(uTime * 0.7);
         gl_FragColor = vec4(uColor * glow * pulse, glow * uIntensity);
