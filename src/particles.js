@@ -1,104 +1,90 @@
 import * as THREE from 'three';
 import { simplex3d } from './shaders/noise.glsl.js';
 
-// Energy corona surrounding the plasma envelope. The vertex shader treats
-// the plasma surface as a moving fluid boundary and derives each particle's
-// position from a velocity field that decays with distance from the surface:
+// Particle emission model.
 //
-//   v(p) = v_surface(dir(p))      where p is near the surface
-//        ≈ v_ambient(p)           where p is far from the surface
+// Each particle is born at the plasma surface, drifts radially outward
+// through the corona over its lifetime, and dies at the outer edge —
+// the plasma is the visible source.
 //
-// Components of the surface velocity:
-//   - Tangential: curl-noise flow along the surface (turbulent eddies)
-//   - Normal:     ∂surface/∂t (radial expansion when the plasma bulges out)
+// Per cycle:
+//   life01 = 0.0  →  spawn on the plasma surface in direction `dir`
+//   life01 = 1.0  →  near uTravel * (uSoftOuter - surface) past surface
 //
-// Particles are also strictly impenetrable: any position inside the plasma
-// surface gets clamped to surface + ε, like dust around a fluid boundary.
+// `dir` is derived from the particle's seed direction perturbed per cycle,
+// so successive cycles emit from neighboring surface points (visibly
+// different "respawn locations"). aRange varies how far the particle
+// travels — some die near the plasma, others reach the outer fade.
+//
+// Tangential drift (curl noise on the local tangent plane) and ambient
+// turbulence are layered on, growing with radial progress so the cloud
+// looks more turbulent further from the surface where the medium is freer.
+//
+// All transitions happen while vLife ≈ 0 so the cycle reset is invisible.
 export function createParticles({
   count = 2700,
-  // Inner radius is intentionally *inside* the plasma's max bulge so the
-  // impenetrable-surface clamp fires every frame for some particles —
-  // bulges literally sweep dust outward, the most visible coupling effect.
-  innerRadius = 1.00,
-  outerRadius = 2.30,
+  outerRadius = 2.40,
 } = {}) {
   const geometry = new THREE.BufferGeometry();
 
+  // Direction seeds — uniformly distributed on the unit sphere. The radial
+  // magnitude is unused; only the direction matters.
   const seeds = new Float32Array(count * 3);
   const phases = new Float32Array(count);
   const sizes = new Float32Array(count);
-  const rates = new Float32Array(count);
   const births = new Float32Array(count);
   const lifeRates = new Float32Array(count);
   const brightnesses = new Float32Array(count);
+  const ranges = new Float32Array(count);
 
   for (let i = 0; i < count; i++) {
-    // Mild inward bias — densest just outside the plasma surface but with
-    // enough particles spread across the full radial range that there is
-    // visible distance variation in the cloud.
-    const u = Math.pow(Math.random(), 1.3);
-    const r = innerRadius + u * (outerRadius - innerRadius);
     const theta = Math.acos(2 * Math.random() - 1);
     const phi = 2 * Math.PI * Math.random();
-    seeds[i * 3 + 0] = r * Math.sin(theta) * Math.cos(phi);
-    seeds[i * 3 + 1] = r * Math.sin(theta) * Math.sin(phi);
-    seeds[i * 3 + 2] = r * Math.cos(theta);
+    seeds[i * 3 + 0] = Math.sin(theta) * Math.cos(phi);
+    seeds[i * 3 + 1] = Math.sin(theta) * Math.sin(phi);
+    seeds[i * 3 + 2] = Math.cos(theta);
     phases[i] = Math.random() * Math.PI * 2.0;
-    // Smaller particles overall — sparks 1.0-1.8 (was 2.2-4.0), dust
-    // 0.3-0.8 (was 0.6-1.6). Reads as fine glittering dust instead of
-    // fat cartoonish blobs.
     sizes[i] = Math.random() < 0.10
       ? 1.0 + Math.random() * 0.8
       : 0.3 + Math.random() * 0.5;
-    rates[i] = (Math.random() - 0.5) * 0.18;
-    // Lifecycle: each particle has a phase offset and a life rate. The
-    // shader fades brightness in and out across the cycle, so at any
-    // moment some particles are fading in, some are bright, some are
-    // fading out — the cloud reads as continuously regenerating instead
-    // of a static set of dots.
     births[i] = Math.random();
-    // lifeRate is cycles per second. 0.04-0.14 -> period 7-25 seconds.
-    lifeRates[i] = 0.04 + Math.random() * 0.10;
-    // Subtle base-brightness variation per particle (very slight, so the
-    // cloud doesn't look like a bimodal light/dark pattern).
+    // lifeRate = cycles/sec. 0.06-0.16 -> period 6-16s. Faster than before
+    // so visible turnover is shorter and emission feels active.
+    lifeRates[i] = 0.06 + Math.random() * 0.10;
     brightnesses[i] = 0.7 + Math.random() * 0.3;
+    // aRange: how far each particle travels from the plasma surface,
+    // expressed as a fraction of (uSoftOuter - surface). Skewed so most
+    // particles die mid-cloud, few reach the outer edge.
+    ranges[i] = 0.45 + Math.pow(Math.random(), 1.4) * 0.55;
   }
 
   geometry.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 3));
   geometry.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
   geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
-  geometry.setAttribute('aRate', new THREE.BufferAttribute(rates, 1));
   geometry.setAttribute('aBirth', new THREE.BufferAttribute(births, 1));
   geometry.setAttribute('aLifeRate', new THREE.BufferAttribute(lifeRates, 1));
   geometry.setAttribute('aBrightness', new THREE.BufferAttribute(brightnesses, 1));
+  geometry.setAttribute('aRange', new THREE.BufferAttribute(ranges, 1));
+  // position required by three.js for frustum culling — give it the seed
+  // direction scaled by something reasonable.
   geometry.setAttribute('position', new THREE.BufferAttribute(seeds.slice(), 3));
-  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), outerRadius + 1.5);
+  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), outerRadius + 1.0);
 
   const uniforms = {
     uTime: { value: 0 },
     // Plasma envelope parameters (kept identical to core.js so the surface
-    // particles see is the surface they're rendered next to).
-    uEnvBase: { value: 1.15 },
-    uEnvDisp: { value: 0.32 },
+    // particles spawn from is the surface they're rendered next to).
+    uEnvBase: { value: 1.90 },
+    uEnvDisp: { value: 0.30 },
     uNoiseScale: { value: 1.4 },
     uNoiseSpeed: { value: 0.28 },
-    // Coupling strengths. Sweep is tangential drag (eddies dragging dust
-    // along the surface). Push is radial impulse when the surface expands
-    // outward at this point. Falloff controls how fast influence decays
-    // with distance from the surface.
-    uEnvSweep: { value: 1.10 },
-    uEnvPush: { value: 1.40 },
-    uEnvFalloff: { value: 2.2 },
-    // Background curl-noise drift far from the surface.
-    uAmbientFlow: { value: 0.28 },
-    // Outer containment: a soft elastic clamp rather than a hard pin, so
-    // particles can't fly off but the boundary doesn't read as a perfect
-    // sphere either. uOuter is the hard cap (rare), uSoftOuter is where
-    // exponential repulsion begins. Wider gap (0.4 vs the previous 0.25)
-    // gives particles a deeper "elastic zone" to drift through, which is
-    // what produces the visible distance variation across the cloud.
+    // Tangential drift strength — curl noise sweeping particles sideways
+    // as they travel outward. Grows with radial progress.
+    uDrift: { value: 0.45 },
+    uAmbient: { value: 0.20 },
+    // Outer fade range. Particles past uSoftOuter rapidly fade to 0 by
+    // uFadeRadius, so anything that overshoots dies cleanly.
     uSoftOuter: { value: outerRadius },
-    uOuter: { value: outerRadius + 0.4 },
     uFadeRadius: { value: outerRadius + 0.2 },
     uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
     uColorCool: { value: new THREE.Color('#7fd8ff') },
@@ -119,30 +105,26 @@ export function createParticles({
       uniform float uEnvDisp;
       uniform float uNoiseScale;
       uniform float uNoiseSpeed;
-      uniform float uEnvSweep;
-      uniform float uEnvPush;
-      uniform float uEnvFalloff;
-      uniform float uAmbientFlow;
+      uniform float uDrift;
+      uniform float uAmbient;
       uniform float uSoftOuter;
-      uniform float uOuter;
       uniform float uFadeRadius;
       uniform float uPixelRatio;
 
       attribute vec3 aSeed;
       attribute float aPhase;
       attribute float aSize;
-      attribute float aRate;
       attribute float aBirth;
       attribute float aLifeRate;
       attribute float aBrightness;
+      attribute float aRange;
 
       varying float vSpeed;
       varying float vRadial;
       varying float vSpark;
-      varying float vInfluence;
-      varying float vDistance;
       varying float vLife;
       varying float vBrightness;
+      varying float vProgress;
 
       float fbm(vec3 p) {
         float n = 0.0;
@@ -160,122 +142,88 @@ export function createParticles({
         return uEnvBase + fbm(dir * uNoiseScale + vec3(0.0, t, 0.0)) * uEnvDisp;
       }
 
-      // Rotate a vector around a given unit axis by an angle (Rodrigues).
-      vec3 rotateAxis(vec3 v, vec3 axis, float angle) {
-        float c = cos(angle);
-        float s = sin(angle);
-        return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
-      }
-
       void main() {
         float t = uTime * uNoiseSpeed;
 
         // Lifecycle. life01 runs 0->1 each cycle. cycleIdx is the discrete
-        // cycle number, used to perturb the seed position so each cycle the
-        // particle "respawns" at a slightly different point — what fades in
-        // is not exactly what faded out, so the cloud reads as continuously
-        // regenerating dust rather than the same pattern blinking in place.
+        // cycle number, used to perturb the spawn direction so each cycle
+        // the particle emits from a slightly different surface point.
         float lifeT  = uTime * aLifeRate + aBirth;
         float life01 = fract(lifeT);
         float cycleIdx = floor(lifeT);
 
-        // Smooth bell-shaped fade: 0 at boundaries, 1 in the middle of life.
-        // Sharp on the way out, slower on the way in, like a real ember.
-        float fadeIn  = smoothstep(0.0, 0.25, life01);
+        // Bell-shaped fade. Sharper on the way in (fadeIn quick) so the
+        // emission feels like a small flash leaving the plasma surface,
+        // gentler on the way out so the trail disperses gradually.
+        float fadeIn  = smoothstep(0.0, 0.15, life01);
         float fadeOut = 1.0 - smoothstep(0.55, 1.0, life01);
         vLife = fadeIn * fadeOut;
         vBrightness = aBrightness;
+        vProgress = life01;
 
-        // Per-cycle seed perturbation. Sample noise with cycleIdx as one
-        // axis so the offset is constant within a cycle but jumps to a new
-        // value each respawn. The jump happens while vLife is ~0 so it's
-        // invisible — the particle just fades in at a fresh position.
-        vec3 cycleOffset = vec3(
+        // Spawn direction: aSeed direction perturbed per cycle. Different
+        // cycle index -> different perturbation -> emission from neighboring
+        // surface points. Magnitude 0.4 gives ~tens-of-degrees variation.
+        vec3 cyclePerturb = vec3(
           snoise(vec3(cycleIdx * 7.31, aPhase * 1.7, 0.0)),
           snoise(vec3(0.0, cycleIdx * 11.7, aPhase * 0.9)),
           snoise(vec3(aPhase * 2.3, 0.0, cycleIdx * 5.9))
-        ) * 0.18;
+        ) * 0.4;
+        vec3 dir = normalize(aSeed + cyclePerturb);
 
-        // Per-particle orbital drift around an axis derived from the phase.
-        // Different rates and axes per particle prevent the cloud from
-        // rotating as a coherent sphere.
-        vec3 axis = normalize(vec3(
-          sin(aPhase * 1.3),
-          cos(aPhase * 0.7) + 0.5,
-          sin(aPhase * 1.9)
-        ));
-        float angle = uTime * aRate + aPhase;
-        vec3 seed = rotateAxis(aSeed, axis, angle) + cycleOffset;
-        vec3 dir = normalize(seed);
+        // Plasma surface radius at this direction at this time. This is
+        // where the particle is born (life01 = 0).
+        float surf = surfaceAt(dir, t);
 
-        // Ambient turbulence (curl noise = divergence-free turbulent flow,
-        // a standard approximation for incompressible fluid motion).
-        vec3 ambient = snoiseCurl(seed * uNoiseScale * 0.7 + vec3(0.0, t, 0.0));
-        vec3 pos = seed + ambient * uAmbientFlow;
+        // Travel destination: somewhere between the plasma surface and the
+        // outer fade, varying per particle so some die near the plasma
+        // and others reach the outer edge.
+        float destination = mix(surf, uSoftOuter, aRange);
 
-        // Plasma surface samples: at the particle's direction, now and a
-        // small step into the future. The future sample lets us recover
-        // ∂surface/∂t (radial surface velocity) without per-frame state.
-        float surf  = surfaceAt(dir, t);
-        float surfF = surfaceAt(dir, t + 0.08);
-        float surfVel = (surfF - surf) / 0.08;
+        // Radial progress: pow(life01, 0.7) starts faster, slows toward
+        // the end — like a particle losing momentum to drag as it moves
+        // through a viscous medium.
+        float radialProgress = pow(life01, 0.7);
+        float travelRadius = mix(surf, destination, radialProgress);
 
-        // Influence factor: 1 right at the surface, decaying exponentially
-        // with distance. Standard viscous-boundary-layer model.
-        float distOut = max(length(pos) - surf, 0.0);
-        float influence = exp(-distOut * uEnvFalloff);
-        vInfluence = influence;
+        // Tangential drift: curl noise on the unit sphere, projected onto
+        // the local tangent plane so it doesn't fight the radial flow.
+        // Strength grows with radial progress so the trail spreads as it
+        // moves out (free turbulence dominates further from the source).
+        vec3 tangent = snoiseCurl(dir * uNoiseScale * 1.6 + vec3(13.7, t * 1.1, aPhase));
+        tangent -= dir * dot(tangent, dir);
+        float driftScale = uDrift * (0.15 + 0.85 * radialProgress);
 
-        // Tangential surface flow — sample curl noise at a slightly higher
-        // frequency on the unit sphere so it reads as turbulence riding on
-        // the surface rather than ambient drift.
-        vec3 surfTangent = snoiseCurl(dir * uNoiseScale * 1.6 + vec3(13.7, t * 1.1, 5.2));
-        // Project onto the local tangent plane so it doesn't push radially.
-        surfTangent -= dir * dot(surfTangent, dir);
-        pos += surfTangent * uEnvSweep * influence;
+        // Ambient curl-noise turbulence in 3D world space, light scale
+        // proportional to radial progress.
+        vec3 ambient = snoiseCurl(dir * travelRadius * 0.6 + vec3(0.0, t, 0.0));
+        float ambientScale = uAmbient * radialProgress;
 
-        // Radial push: when the surface is expanding outward at this point
-        // (positive surfVel), particles get accelerated outward. Negative
-        // surfVel (surface receding) doesn't pull particles back.
-        pos += dir * max(surfVel, 0.0) * uEnvPush * influence;
+        // Final position: emission direction × travel radius, plus drift
+        // and turbulence offsets.
+        vec3 pos = dir * travelRadius + tangent * driftScale + ambient * ambientScale;
 
-        // Impenetrable plasma surface: any position inside surf + ε gets
-        // pushed back out to the surface.
-        float minRadius = surf + 0.04;
+        // Safety clamp: if a flare bulges the surface past the particle
+        // (rare since the particle is always at radius >= surf at start
+        // of life), push it back out so it never appears inside the plasma.
         float L = length(pos);
+        float minRadius = surf + 0.02;
         if (L < minRadius) {
           pos = (pos / L) * minRadius;
           L = minRadius;
         }
 
-        // No outer clamp -- previous elastic boundary caused particles to
-        // accumulate and drift along the soft outer edge. Particles now
-        // flow freely outward; the fragment shader fades them out sharply
-        // past uSoftOuter so they die when leaving the cloud area. The
-        // lifecycle continues running, and the per-cycle seed offset will
-        // respawn them at a fresh interior position next cycle.
-
-        // Final velocity proxy for shading — particles strongly coupled to
-        // the surface, or moving fast in ambient curl, glow warmer.
-        vSpeed = length(ambient) + length(surfTangent) * influence;
-        vDistance = length(pos);
-        // Outer boundary fade: 1 inside the cloud area, ramping to 0 over
-        // a short transition past uSoftOuter, fully faded by uFadeRadius.
-        // Particles drifting outward die rapidly instead of pinning to
-        // the boundary.
-        vRadial = 1.0 - smoothstep(uSoftOuter, uFadeRadius, vDistance);
-        // Smooth sparkness across the dust/spark gap (dust ≤0.8, sparks ≥1.0)
-        // instead of a hard step, for a gentler size→shape mapping.
+        vSpeed = length(tangent) * driftScale + length(ambient) * ambientScale;
+        // Outer boundary fade. Anything that overshoots uSoftOuter
+        // (rare given aRange clamps destination, but possible from
+        // tangential + ambient layers) fades to 0 by uFadeRadius.
+        vRadial = 1.0 - smoothstep(uSoftOuter, uFadeRadius, L);
         vSpark = smoothstep(0.85, 1.4, aSize);
 
         vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
         gl_Position = projectionMatrix * mvPosition;
 
         float size = aSize * (1.0 + vSpeed * 0.4);
-        // Bigger sprite footprint than before (max 32px vs 22) so the
-        // wider halo gaussian has room to bloom past the bright core
-        // before being clipped by the point disc — the halo is what
-        // produces the glow, so the disc has to fit it.
         gl_PointSize = clamp(size * uPixelRatio * (95.0 / -mvPosition.z), 1.0, 32.0);
       }
     `,
@@ -287,59 +235,35 @@ export function createParticles({
       varying float vSpeed;
       varying float vRadial;
       varying float vSpark;
-      varying float vInfluence;
-      varying float vDistance;
       varying float vLife;
       varying float vBrightness;
+      varying float vProgress;
 
-      // Each particle is a tight gaussian core wrapped in a wide soft halo
-      // that emits visible glow proportional to the particle's brightness.
-      // The halo's contribution is amplified non-linearly with vLife so the
-      // glow dramatically blooms when the particle is at peak life and
-      // collapses as it fades — every individual particle visibly breathes.
       void main() {
         vec2 uv = gl_PointCoord - 0.5;
         float d = length(uv);
         if (d > 0.5) discard;
 
-        // Even wider halo (coefficient 2.5 vs 4) so the glow extends
-        // most of the way to the edge of the point disc. Core stays
-        // tight at 70 so the lit point itself remains pixel-sharp.
         float core = exp(-d * d * 70.0);
         float halo = exp(-d * d * 2.5);
 
-        // Glow boost: pow(vLife, 0.6) rises faster than vLife so the halo
-        // peaks while the particle is mid-life, then drops sharply as it
-        // dies. Halo intensity coefficients further bumped here so the
-        // glow is the dominant visual element, not the core.
         float glowBoost = pow(max(vLife, 0.0), 0.6);
 
         float dustShape  = exp(-d * d * 14.0) * 0.55 + halo * (0.40 + 0.65 * glowBoost);
         float sparkShape = core * 1.00 + halo * (0.65 + 1.00 * glowBoost);
         float intensity  = mix(dustShape, sparkShape, vSpark);
 
-        // Particles riding the plasma surface, or moving fast in ambient
-        // curl, glow warmer; sparks pull toward white.
-        float warmth = clamp(vSpeed * 0.7 + vInfluence * 0.6, 0.0, 1.0);
+        // Color temperature shifts cool as particles travel outward — they
+        // start hot at the plasma surface (warm) and cool with distance.
+        // Mixed with vSpeed so fast tangential drift keeps things warm.
+        float warmth = clamp((1.0 - vProgress) * 0.7 + vSpeed * 0.6, 0.0, 1.0);
         vec3 col = mix(uColorCool, uColorWarm, warmth);
         col = mix(col, uSpark, vSpark * 0.7);
 
-        // Subtle chromatic edge: a touch of cool blue on the outer halo
-        // mimics the chromatic aberration of a real lit point through a
-        // lens. Adds a "lit" feel rather than flat additive blur.
+        // Subtle chromatic edge for a "lit" feel.
         float chroma = max(halo - core, 0.0);
         col = mix(col, col * vec3(0.7, 0.88, 1.10), chroma * 0.25);
 
-        // Three independent attenuation factors:
-        //   - vRadial: 1 inside the cloud, 0 past the outer boundary.
-        //     Particles that drift outward die out sharply instead of
-        //     pinning to the boundary.
-        //   - vLife:   bell-curve lifecycle (0 -> 1 -> 0 over each cycle).
-        //   - vBrightness: per-particle base brightness (0.7-1.0).
-        //
-        // With 2700 particles all on independent cycles + the per-cycle
-        // seed offset, particles that hit the edge fade to nothing, then
-        // their next lifecycle resurrects them at a fresh interior point.
         float alpha = intensity * 0.85 * vRadial * vLife * vBrightness;
 
         gl_FragColor = vec4(col, alpha);
