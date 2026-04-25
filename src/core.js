@@ -5,7 +5,9 @@ import { simplex3d } from './shaders/noise.glsl.js';
 // vertices are displaced by layered 3D noise in the vertex shader, shaded with
 // a fresnel-weighted emissive gradient so the core reads as luminous plasma.
 export function createCore() {
-  const geometry = new THREE.IcosahedronGeometry(0.55, 64);
+  // Detail 24 → ~11k tris: smooth enough for noise displacement,
+  // light enough for mobile GPUs.
+  const geometry = new THREE.IcosahedronGeometry(0.55, 24);
 
   const uniforms = {
     uTime: { value: 0 },

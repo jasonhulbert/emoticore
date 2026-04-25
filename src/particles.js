@@ -30,7 +30,7 @@ export function createParticles({
     seeds[i * 3 + 2] = r * Math.cos(theta);
     phases[i] = Math.random() * Math.PI * 2.0;
     // Mix of small dust and rarer bright sparks.
-    sizes[i] = Math.random() < 0.08 ? 2.4 + Math.random() * 2.0 : 0.6 + Math.random() * 1.1;
+    sizes[i] = Math.random() < 0.04 ? 1.4 + Math.random() * 0.8 : 0.35 + Math.random() * 0.55;
   }
 
   geometry.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 3));
@@ -133,8 +133,10 @@ export function createParticles({
         vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
         gl_Position = projectionMatrix * mvPosition;
 
-        float size = aSize * (1.0 + vSpeed * 0.6);
-        gl_PointSize = size * uPixelRatio * (220.0 / -mvPosition.z);
+        float size = aSize * (1.0 + vSpeed * 0.4);
+        // Clamp to keep individual sparks from becoming giant additive blobs
+        // on high-DPI screens (iPad pixel ratio is 2-3x).
+        gl_PointSize = clamp(size * uPixelRatio * (55.0 / -mvPosition.z), 1.0, 40.0);
       }
     `,
     fragmentShader: /* glsl */ `
@@ -151,17 +153,19 @@ export function createParticles({
         float d = length(uv);
         if (d > 0.5) discard;
 
-        // Soft radial falloff; sparks get a tight hot core plus halo.
-        float core = smoothstep(0.5, 0.0, d);
-        float halo = smoothstep(0.5, 0.15, d);
-        float shape = mix(core * 0.6 + halo * 0.4, core * 0.2 + pow(halo, 3.0), vSpark);
+        // Tight gaussian-ish falloff for dust; sparks add a soft halo on top.
+        float dust = exp(-d * d * 18.0);
+        float halo = smoothstep(0.5, 0.1, d);
+        float shape = mix(dust, dust * 0.6 + pow(halo, 4.0) * 0.6, vSpark);
 
-        vec3 col = mix(uColorCool, uColorWarm, clamp(vSpeed * 1.5, 0.0, 1.0));
-        col = mix(col, uSpark, vSpark * 0.7);
+        // Color shifts from cool cyan to warm only at high curl-flow speed,
+        // so the cloud reads mostly cool with occasional warm streaks.
+        vec3 col = mix(uColorCool, uColorWarm, clamp(vSpeed * 0.4, 0.0, 1.0));
+        col = mix(col, uSpark, vSpark * 0.5);
 
         // Fade particles near the orb wall so they feel contained by frost.
-        float edgeFade = 1.0 - smoothstep(0.7, 1.0, vRadial);
-        float alpha = shape * (0.35 + 0.65 * edgeFade);
+        float edgeFade = 1.0 - smoothstep(0.6, 1.0, vRadial);
+        float alpha = shape * (0.18 + 0.42 * edgeFade);
 
         gl_FragColor = vec4(col, alpha);
       }
