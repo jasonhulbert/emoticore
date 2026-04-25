@@ -21,7 +21,7 @@ import { simplex3d } from './shaders/noise.glsl.js';
 //      brief brilliant filaments that flash across the surface.
 //   5. Slow pulse: global brightness modulation tied to the displacement so
 //      brighter regions also breathe.
-export function createCore({ radius = 1.15 } = {}) {
+export function createCore({ radius = 1.90 } = {}) {
   // Detail 64 -> ~80k tris. The previous 24 was too coarse for the noise
   // frequency we're displacing at: each fbm feature was smaller than the
   // inter-vertex spacing in places, producing visible faceting at peaks.
@@ -31,7 +31,14 @@ export function createCore({ radius = 1.15 } = {}) {
     uTime: { value: 0 },
     uNoiseScale: { value: 1.4 },
     uNoiseSpeed: { value: 0.28 },
-    uDisplacement: { value: 0.32 },
+    uDisplacement: { value: 0.30 },
+    // Solar flares: rare bright bulges that drift across the surface.
+    // Same noise field is sampled by vertex (for displacement bulge) and
+    // fragment (for visual brightness) so the visible flash and the
+    // physical bulge always line up.
+    uFlareSpeed: { value: 0.30 },
+    uFlareScale: { value: 1.2 },
+    uFlareDisp: { value: 0.12 },
     uPulse: { value: 0.0 },
     // Warm palette matched to the corona — deep ember through amber up to
     // a hot spark white, so the plasma reads as a continuation of the
@@ -53,6 +60,9 @@ export function createCore({ radius = 1.15 } = {}) {
       uniform float uNoiseScale;
       uniform float uNoiseSpeed;
       uniform float uDisplacement;
+      uniform float uFlareSpeed;
+      uniform float uFlareScale;
+      uniform float uFlareDisp;
       uniform float uPulse;
 
       varying vec3 vNormal;
@@ -60,6 +70,7 @@ export function createCore({ radius = 1.15 } = {}) {
       varying vec3 vSurfaceDir;
       varying float vDisplacement;
       varying float vNoise;
+      varying float vFlare;
 
       float fbm(vec3 p) {
         float n = 0.0;
@@ -78,12 +89,22 @@ export function createCore({ radius = 1.15 } = {}) {
         float t = uTime * uNoiseSpeed;
         float n = fbm(p * uNoiseScale + vec3(0.0, t, 0.0));
         float pulse = (0.5 + 0.5 * sin(uTime * 0.8)) * 0.15 + uPulse;
-        float disp = n * uDisplacement + pulse * 0.05;
+
+        // Solar flare field: low-frequency 3D noise drifting slowly through
+        // a fourth axis (time). High threshold so only the rare crests of
+        // the noise field trigger flares — at any moment 0-3 active spots.
+        // smoothstep -> sharp edges, pow -> sharper still so the active
+        // region is small + bright rather than diffuse.
+        float flareN = fbm(p * uFlareScale + vec3(0.0, 0.0, uTime * uFlareSpeed));
+        float flare = pow(smoothstep(0.55, 0.80, flareN), 2.0);
+
+        float disp = n * uDisplacement + pulse * 0.05 + flare * uFlareDisp;
 
         vec3 displaced = p + normal * disp;
 
         vDisplacement = disp;
         vNoise = n;
+        vFlare = flare;
         // Pass the undisplaced unit direction so the fragment shader can
         // sample stable noise patterns over the rotating surface.
         vSurfaceDir = dir;
@@ -106,6 +127,7 @@ export function createCore({ radius = 1.15 } = {}) {
       varying vec3 vSurfaceDir;
       varying float vDisplacement;
       varying float vNoise;
+      varying float vFlare;
 
       float fbm4(vec3 p) {
         float n = 0.0;
@@ -148,22 +170,34 @@ export function createCore({ radius = 1.15 } = {}) {
         // Color buildup: ember base at troughs -> amber at the body ->
         // hot rim at fresnel grazing -> spark filaments on top of that.
         vec3 col = mix(uColorEmber, uColorAmber, temp);
-        col = mix(col, uColorHot, fresnel * 0.85);
+        col = mix(col, uColorHot, fresnel * 1.00);
 
         // Hot bias on the bulge centers (high temp + low fresnel) so the
         // peaks glow from within rather than only at their silhouette.
-        col += uColorHot * temp * (1.0 - fresnel) * 0.45;
+        col += uColorHot * temp * (1.0 - fresnel) * 0.55;
+
+        // Body emission boost — every part of the surface emits a low
+        // amber baseline so the plasma reads as glowing volume rather
+        // than a thin shell.
+        col += uColorAmber * 0.18;
 
         // Veins paint warm light onto the surface, brightest where they
         // line up with the rim — like seeing through to deeper channels.
-        col += uColorSpark * veins * (0.55 + fresnel * 0.7);
+        col += uColorSpark * veins * (0.65 + fresnel * 0.8);
 
         // Ripples add a soft warm shimmer over the body.
-        col += uColorSpark * ripple * 0.9;
+        col += uColorSpark * ripple * 1.05;
 
         // Crackle flashes white-hot regardless of fresnel — the fastest
         // and most intermittent of the layers.
         col += uColorSpark * crackle * 1.5;
+
+        // (7) Solar flares — bright violent peaks at the rare crests of
+        // the flare noise field. The same vFlare value that drove the
+        // vertex displacement bulge here drives a bright white-hot color
+        // burst, so the visible flash and the physical bulge align.
+        col += uColorSpark * vFlare * 3.0;
+        col += uColorHot * vFlare * 1.5;
 
         // (6) Slow whole-body pulse keyed to the noise so brighter regions
         // also breathe more — never feels static.
@@ -173,12 +207,16 @@ export function createCore({ radius = 1.15 } = {}) {
         // Alpha is the sum of fresnel rim, vein contribution, and crackle
         // flashes — the silhouette and bright filaments dominate, the dim
         // body stays mostly transparent so the corona shows through.
+        // Body baseline alpha bumped (0.16 -> 0.22) for the increased
+        // overall glow; flares add their own significant alpha so the
+        // erupting region is clearly opaque.
         float alpha = clamp(
-          0.16
-          + fresnel * 0.75
+          0.22
+          + fresnel * 0.85
           + veins * 0.30
           + ripple * 0.25
-          + crackle * 0.55,
+          + crackle * 0.55
+          + vFlare * 0.65,
           0.0,
           1.0
         );
