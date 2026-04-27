@@ -292,14 +292,21 @@ export function createSynapses({ surfaceRadius = 2.05 } = {}) {
     const ay = r * Math.sin(phi);
     const az = u;
 
-    // Orthonormal basis perpendicular to A.
-    const refX = Math.abs(ay) < 0.9 ? 0 : 1;
-    const refY = Math.abs(ay) < 0.9 ? 1 : 0;
-    let n1x = ay * 0  - az * refY;
-    let n1y = az * refX - ax * 0;
-    let n1z = ax * refY - ay * refX;
+    // Orthonormal basis perpendicular to A. ref is the world up axis
+    // (Y) unless A is too close to it, in which case we fall back to
+    // the X axis to avoid a degenerate cross product.
+    const useY = Math.abs(ay) < 0.9;
+    // ref = useY ? (0,1,0) : (1,0,0)
+    // n1 = normalize(A × ref)
+    let n1x, n1y, n1z;
+    if (useY) {
+      n1x = -az;     n1y = 0;       n1z = ax;        // A × (0,1,0)
+    } else {
+      n1x = 0;       n1y = az;      n1z = -ay;       // A × (1,0,0)
+    }
     const nl = Math.hypot(n1x, n1y, n1z) || 1;
     n1x /= nl; n1y /= nl; n1z /= nl;
+    // n2 = A × n1 (already orthonormal since |A|=1, |n1|=1, A⊥n1).
     const n2x = ay * n1z - az * n1y;
     const n2y = az * n1x - ax * n1z;
     const n2z = ax * n1y - ay * n1x;
