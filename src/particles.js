@@ -44,9 +44,12 @@ export function createParticles({
     seeds[i * 3 + 1] = Math.sin(theta) * Math.sin(phi);
     seeds[i * 3 + 2] = Math.cos(theta);
     phases[i] = Math.random() * Math.PI * 2.0;
-    sizes[i] = Math.random() < 0.10
-      ? 1.0 + Math.random() * 0.8
-      : 0.3 + Math.random() * 0.5;
+    // Tight uniform size band — no more "spark" outliers. The previous
+    // 10% bright-spark population read as too chunky against the rest
+    // of the cloud; a single small range gives a consistent dust look.
+    // vSpark in the fragment shader stays at 0 across this range, so
+    // the spark-tint code path no longer contributes.
+    sizes[i] = 0.30 + Math.random() * 0.20;
     births[i] = Math.random();
     // lifeRate = cycles/sec. 0.06-0.16 -> period 6-16s. Faster than before
     // so visible turnover is shorter and emission feels active.
