@@ -157,8 +157,10 @@ renderer.domElement.addEventListener('pointerdown', () => {
 });
 
 // Mood manager — smoothly lerps a curated set of plasma/particle/onyx
-// uniforms toward a named target each frame.
-const moods = new MoodManager({ core, particles, onyx, synapses, transitionSeconds: 1.5 });
+// uniforms toward a named target each frame. transitionSeconds defaults
+// to 0.35 in MoodManager (snappy crossfade); override only if you want
+// to slow that down.
+const moods = new MoodManager({ core, particles, onyx, synapses });
 
 createTuningPanel({ moods, synapses });
 
@@ -192,6 +194,7 @@ let plasmaNoiseTime = 0;
 let plasmaFlareTime = 0;
 // Inertial coupling state for the loose particle cloud.
 let prevOrbRotY = 0;
+let prevCamAzimuth = controls.getAzimuthalAngle();
 let particleSpinDrift = 0;
 function tick() {
   const dt = clock.getDelta();
@@ -217,12 +220,10 @@ function tick() {
   // it tracks both (a) click pokes (uPulse decay) and (b) the mood-driven
   // mesh scaling. uEnvBase + uEnvDisp + outer-fade radii all multiply by
   // plasmaScale because the visible plasma surface in world space is
-  // (object-space surface) × mesh.scale.
-  // plasmaScaleEffective = lerped plasmaScale × elastic kick. Using the
-  // effective value here means the particle envelope, glow billboard,
-  // and synapse shell all bounce in lockstep with the visible plasma
-  // mesh during a mood transition.
-  const ps = moods.plasmaScaleEffective;
+  // (object-space surface) × mesh.scale. Particle envelope, glow
+  // billboard, and synapse shell all key off the same value so they
+  // track the visible plasma mesh through mood transitions.
+  const ps = moods.plasmaScale;
   particles.uniforms.uEnvBase.value = PLASMA_BASE_RADIUS * ps;
   particles.uniforms.uEnvDisp.value =
     (core.uniforms.uDisplacement.value + core.uniforms.uPulse.value * 0.15) * ps;
@@ -244,17 +245,36 @@ function tick() {
   group.rotation.y = orbRotY;
   group.position.y = Math.sin(elapsed * 0.6) * 0.02;
 
-  // Loose inertial coupling for the particle cloud. We integrate a
-  // fraction of the orb's angular velocity into a drift value, then
-  // exponentially decay it back to zero. The result: when the orb
-  // spins, particles get nudged in the same direction; the nudge
-  // fades over ~1s and they settle back to scene-space orientation.
-  // Idle sway has near-zero angular velocity so it barely registers.
+  // Loose inertial coupling for the particle cloud. Two angular-velocity
+  // inputs feed the same integrator and exponentially decay.
+  //
+  //   (a) orbAngVel — the orb actually rotating in world space (mood
+  //       transition spin). Particles drift in the same direction in
+  //       world space, lagging the orb visibly.
+  //
+  //   (b) camAzVel — the user dragging via OrbitControls. The orb stays
+  //       still in world space; the camera orbits. We want the visual
+  //       result from the user's POV to feel just like a mood spin: the
+  //       orb appears to rotate, particles trail behind. To produce
+  //       that, particles must rotate in world space in the SAME
+  //       direction as the camera (a fraction of camera motion). From
+  //       the now-moving camera POV, particles then appear to lag the
+  //       orb's apparent rotation. So camAzVel adds with positive sign.
+  //
+  // Sustained-drag steady-state: particles track at coupling × τ × ω of
+  // the camera's angular velocity. With coupling=0.55 and τ=1.0, that's
+  // 0.55ω in world, which from camera POV reads as the orb moving and
+  // particles trailing at ~45% of its apparent rate.
   const orbAngVel = (orbRotY - prevOrbRotY) / Math.max(dt, 1e-4);
   prevOrbRotY = orbRotY;
-  const coupling = 0.35;
+  const camAz = controls.getAzimuthalAngle();
+  const camAzVel = (camAz - prevCamAzimuth) / Math.max(dt, 1e-4);
+  prevCamAzimuth = camAz;
+
+  const coupling = 0.55;
   const decayTau = 1.0;
-  particleSpinDrift += orbAngVel * coupling * dt;
+  const inputVel = orbAngVel + camAzVel;
+  particleSpinDrift += inputVel * coupling * dt;
   particleSpinDrift *= Math.exp(-dt / decayTau);
   particles.points.rotation.y = particleSpinDrift;
 

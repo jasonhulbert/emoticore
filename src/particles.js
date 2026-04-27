@@ -97,7 +97,6 @@ export function createParticles({
     uPixelRatio: { value: Math.min(window.devicePixelRatio, 1.5) },
     uColorCool: { value: new THREE.Color('#7fd8ff') },
     uColorWarm: { value: new THREE.Color('#ffb36c') },
-    uSpark: { value: new THREE.Color('#fff4d8') },
   };
 
   const material = new THREE.ShaderMaterial({
@@ -129,7 +128,6 @@ export function createParticles({
 
       varying float vSpeed;
       varying float vRadial;
-      varying float vSpark;
       varying float vLife;
       varying float vBrightness;
       varying float vProgress;
@@ -228,7 +226,6 @@ export function createParticles({
         // (rare given aRange clamps destination, but possible from
         // tangential + ambient layers) fades to 0 by uFadeRadius.
         vRadial = 1.0 - smoothstep(uSoftOuter, uFadeRadius, L);
-        vSpark = smoothstep(0.85, 1.4, aSize);
 
         vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
         gl_Position = projectionMatrix * mvPosition;
@@ -240,11 +237,9 @@ export function createParticles({
     fragmentShader: /* glsl */ `
       uniform vec3 uColorCool;
       uniform vec3 uColorWarm;
-      uniform vec3 uSpark;
 
       varying float vSpeed;
       varying float vRadial;
-      varying float vSpark;
       varying float vLife;
       varying float vBrightness;
       varying float vProgress;
@@ -254,28 +249,25 @@ export function createParticles({
         float d = length(uv);
         if (d > 0.5) discard;
 
+        // Two gaussians: a tight inner blob and a wide halo. The
+        // chroma calculation below uses both, and the dust shape
+        // composites them.
         float core = exp(-d * d * 70.0);
         float halo = exp(-d * d * 2.5);
-
         float glowBoost = pow(max(vLife, 0.0), 0.6);
+        float intensity = exp(-d * d * 14.0) * 0.55 + halo * (0.40 + 0.65 * glowBoost);
 
-        float dustShape  = exp(-d * d * 14.0) * 0.55 + halo * (0.40 + 0.65 * glowBoost);
-        float sparkShape = core * 1.00 + halo * (0.65 + 1.00 * glowBoost);
-        float intensity  = mix(dustShape, sparkShape, vSpark);
-
-        // Color temperature shifts cool as particles travel outward — they
-        // start hot at the plasma surface (warm) and cool with distance.
-        // Mixed with vSpeed so fast tangential drift keeps things warm.
+        // Color temperature shifts cool as particles travel outward —
+        // start warm at the plasma surface, cool with distance. Fast
+        // tangential drift keeps things warm.
         float warmth = clamp((1.0 - vProgress) * 0.7 + vSpeed * 0.6, 0.0, 1.0);
         vec3 col = mix(uColorCool, uColorWarm, warmth);
-        col = mix(col, uSpark, vSpark * 0.7);
 
         // Subtle chromatic edge for a "lit" feel.
         float chroma = max(halo - core, 0.0);
         col = mix(col, col * vec3(0.7, 0.88, 1.10), chroma * 0.25);
 
         float alpha = intensity * 0.85 * vRadial * vLife * vBrightness;
-
         gl_FragColor = vec4(col, alpha);
       }
     `,
