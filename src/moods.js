@@ -138,9 +138,28 @@ const MOODS = {
 export const MOOD_NAMES = Object.keys(MOODS);
 
 export class MoodManager {
-  constructor({ core, particles, onyx, synapses, transitionSeconds = 1.5 } = {}) {
+  constructor({ core, particles, onyx, synapses, transitionSeconds = 0.35 } = {}) {
     this.systems = { core, particles, onyx, synapses };
+    // Time-constant of the exponential lerp toward target uniforms —
+    // smaller = snappier color/displacement crossfade.
     this.transitionSeconds = transitionSeconds;
+    // Independent "kick" animation that fires on every setMood: a
+    // partial spin and an elastic scale bounce on the plasma. Lives
+    // beyond the uniform lerp so the visible motion settles after the
+    // color has already landed, the way an interface element punctuates
+    // a state change.
+    this.kickDuration = 0.9;
+    this.kickTime = this.kickDuration; // start settled
+    // Cumulative spin: every setMood adds a randomized delta to
+    // spinTarget; the kick eases spinCurrent from spinStart to
+    // spinTarget with an elastic-out curve, so the orb overshoots and
+    // settles at a NEW orientation rather than returning to its
+    // pre-transition pose. Idle sway is layered on top in main.js.
+    this.spinCurrent = 0;
+    this.spinStart = 0;
+    this.spinTarget = 0;
+    this.transitionSpin = 0;
+    this.plasmaScaleEffective = 1;
     // Pre-resolve color strings to THREE.Color so update() never allocates.
     this.targets = {};
     for (const [name, def] of Object.entries(MOODS)) {
@@ -190,8 +209,48 @@ export class MoodManager {
 
   setMood(name) {
     if (!this.targets[name]) return;
+    if (name === this.currentName) return;
     this.currentName = name;
     this.target = this.targets[name];
+    // Restart the kick animation. Random spin direction so successive
+    // transitions don't always pivot the same way.
+    this.kickTime = 0;
+    // Pick a small randomized rotation delta (15°–40°) and a random
+    // sign; accumulate into spinTarget so each transition lands at a
+    // fresh orientation rather than swinging back. spinStart captures
+    // the pose at the start of this kick so the eased path is
+    // current → target.
+    this.spinStart = this.spinCurrent;
+    const dir = Math.random() < 0.5 ? -1 : 1;
+    const delta = (Math.PI / 12) + Math.random() * (5 * Math.PI / 36);
+    this.spinTarget = this.spinCurrent + delta * dir;
+  }
+
+  // One-shot kick motion sampled by update(). Returns:
+  //   scaleKick  — multiplier on plasma scale, damped sine that
+  //                overshoots and settles to zero (elastic bounce)
+  // The cumulative spin is updated in place on this.spinCurrent —
+  // it's not returned because it doesn't reset between transitions.
+  _computeKick() {
+    if (this.kickTime >= this.kickDuration) {
+      // Snap to exact target so subtle floating-point drift can't
+      // accumulate over many transitions.
+      this.spinCurrent = this.spinTarget;
+      return { scaleKick: 0 };
+    }
+    const p = this.kickTime / this.kickDuration;
+
+    // easeOutCubic — smooth deceleration, no overshoot. Reads as a
+    // confident settle rather than the cartoonish bounce of an
+    // elastic curve.
+    const eased = 1 - Math.pow(1 - p, 3);
+    this.spinCurrent = this.spinStart + (this.spinTarget - this.spinStart) * eased;
+
+    // No scale bounce — an oscillating elastic scale read as
+    // cartoonish. The transition is communicated through the spin
+    // and the existing uniform lerp; the plasma scale changes only
+    // because the new mood's target.scale.plasma differs.
+    return { scaleKick: 0 };
   }
 
   update(dt) {
@@ -217,8 +276,18 @@ export class MoodManager {
     this.plasmaScale  += (this.target.scale.plasma   - this.plasmaScale)  * alpha;
     this.synapseRate  += (this.target.synapses.rate  - this.synapseRate)  * alpha;
     this.synapseBurst += (this.target.synapses.burst - this.synapseBurst) * alpha;
+    // Advance the kick clock and apply spin/elastic-bounce on top of
+    // the lerped plasma scale. The bounced value is exposed as
+    // plasmaScaleEffective so main.js can multiply through to all the
+    // dependent radii (particle envelope, glow size, synapse shell)
+    // and they bounce together with the visible plasma surface.
+    this.kickTime = Math.min(this.kickTime + dt, this.kickDuration + 1);
+    const kick = this._computeKick();
+    this.transitionSpin = this.spinCurrent;
+    this.plasmaScaleEffective = this.plasmaScale * (1 + kick.scaleKick);
+
     this.systems.onyx.mesh.scale.setScalar(this.onyxScale);
-    this.systems.core.mesh.scale.setScalar(this.plasmaScale);
+    this.systems.core.mesh.scale.setScalar(this.plasmaScaleEffective);
     // Glow billboard's size is driven by uSize uniform (set by main.js
     // each frame) rather than mesh.scale, since the billboard's vertex
     // shader handles its own sizing — no scale needed here.

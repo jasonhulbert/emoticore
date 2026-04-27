@@ -135,9 +135,16 @@ group.add(core.mesh);
 // the visible result is a soft volumetric aura bleeding past the plasma
 // silhouette — light emitting from the center outward.
 group.add(core.glow);
-group.add(particles.points);
 group.add(synapses.mesh);
 scene.add(group);
+
+// Particles live OUTSIDE the orb group so they don't rigidly follow
+// its rotation. Instead they drift in response to the orb's angular
+// velocity (see tick loop) — a sudden mood-change spin nudges them in
+// the same direction and the drift decays back to zero, so they
+// always settle in their natural orientation rather than ending up
+// rotated relative to scene space.
+scene.add(particles.points);
 
 // Glow size baseline; main.js scales it each frame to track moods.plasmaScale
 // so the aura swells/contracts in sync with the plasma mesh.
@@ -183,6 +190,9 @@ let frameCount = 0;
 // uNoiseTime so they stay locked to the same surface field.
 let plasmaNoiseTime = 0;
 let plasmaFlareTime = 0;
+// Inertial coupling state for the loose particle cloud.
+let prevOrbRotY = 0;
+let particleSpinDrift = 0;
 function tick() {
   const dt = clock.getDelta();
   const elapsed = clock.elapsedTime;
@@ -208,7 +218,11 @@ function tick() {
   // mesh scaling. uEnvBase + uEnvDisp + outer-fade radii all multiply by
   // plasmaScale because the visible plasma surface in world space is
   // (object-space surface) × mesh.scale.
-  const ps = moods.plasmaScale;
+  // plasmaScaleEffective = lerped plasmaScale × elastic kick. Using the
+  // effective value here means the particle envelope, glow billboard,
+  // and synapse shell all bounce in lockstep with the visible plasma
+  // mesh during a mood transition.
+  const ps = moods.plasmaScaleEffective;
   particles.uniforms.uEnvBase.value = PLASMA_BASE_RADIUS * ps;
   particles.uniforms.uEnvDisp.value =
     (core.uniforms.uDisplacement.value + core.uniforms.uPulse.value * 0.15) * ps;
@@ -225,8 +239,24 @@ function tick() {
   synapses.uniforms.uRadius.value = SYNAPSE_BASE_RADIUS * ps;
   synapses.update(elapsed, dt);
 
-  group.rotation.y = Math.sin(elapsed * 0.15) * 0.15;
+  // Idle sway plus the cumulative mood-change spin.
+  const orbRotY = Math.sin(elapsed * 0.15) * 0.15 + moods.transitionSpin;
+  group.rotation.y = orbRotY;
   group.position.y = Math.sin(elapsed * 0.6) * 0.02;
+
+  // Loose inertial coupling for the particle cloud. We integrate a
+  // fraction of the orb's angular velocity into a drift value, then
+  // exponentially decay it back to zero. The result: when the orb
+  // spins, particles get nudged in the same direction; the nudge
+  // fades over ~1s and they settle back to scene-space orientation.
+  // Idle sway has near-zero angular velocity so it barely registers.
+  const orbAngVel = (orbRotY - prevOrbRotY) / Math.max(dt, 1e-4);
+  prevOrbRotY = orbRotY;
+  const coupling = 0.35;
+  const decayTau = 1.0;
+  particleSpinDrift += orbAngVel * coupling * dt;
+  particleSpinDrift *= Math.exp(-dt / decayTau);
+  particles.points.rotation.y = particleSpinDrift;
 
   controls.update();
 
